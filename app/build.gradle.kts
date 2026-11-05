@@ -31,8 +31,8 @@ android {
         applicationId = "com.portalhacks.frame"
         minSdk = 28
         targetSdk = 29
-        versionCode = 14
-        versionName = "1.2.0"
+        versionCode = 15
+        versionName = "1.2.1-tablet"
     }
 
     compileOptions {
@@ -54,6 +54,7 @@ android {
     }
 
     sourceSets["test"].java.setSrcDirs(listOf("tests"))
+    testOptions.unitTests.isIncludeAndroidResources = true
 
     signingConfigs {
         create("release") {
@@ -116,6 +117,10 @@ detekt {
 
 dependencies {
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
     implementation(files("libs/zxing-core-3.5.3.jar"))
 
     implementation(platform(libs.compose.bom))

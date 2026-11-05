@@ -156,23 +156,19 @@
     <file name="src/com/portalhacks/frame/GooglePhotosSource.kt">
         </file>
     <file name="src/com/portalhacks/frame/ImageLoader.kt">
-        <error line="504" column="24" source="standard:parameter-list-wrapping" />
-        <error line="504" column="24" source="standard:function-signature" />
-        <error line="504" column="34" source="standard:parameter-list-wrapping" />
-        <error line="504" column="34" source="standard:function-signature" />
-        <error line="505" column="24" source="standard:parameter-list-wrapping" />
-        <error line="505" column="24" source="standard:function-signature" />
-        <error line="505" column="34" source="standard:parameter-list-wrapping" />
-        <error line="505" column="34" source="standard:function-signature" />
-        <error line="505" column="42" source="standard:parameter-list-wrapping" />
-        <error line="505" column="42" source="standard:function-signature" />
-        <error line="505" column="50" source="standard:parameter-list-wrapping" />
-        <error line="505" column="50" source="standard:function-signature" />
-        <error line="505" column="67" source="standard:trailing-comma-on-declaration-site" />
-        <error line="520" column="22" source="standard:argument-list-wrapping" />
-        <error line="520" column="69" source="standard:argument-list-wrapping" />
-        <error line="520" column="89" source="standard:argument-list-wrapping" />
-        <error line="520" column="90" source="standard:trailing-comma-on-call-site" />
+        <error line="514" column="24" source="standard:parameter-list-wrapping" />
+        <error line="514" column="24" source="standard:function-signature" />
+        <error line="514" column="34" source="standard:parameter-list-wrapping" />
+        <error line="514" column="34" source="standard:function-signature" />
+        <error line="515" column="24" source="standard:parameter-list-wrapping" />
+        <error line="515" column="24" source="standard:function-signature" />
+        <error line="515" column="34" source="standard:parameter-list-wrapping" />
+        <error line="515" column="34" source="standard:function-signature" />
+        <error line="515" column="42" source="standard:parameter-list-wrapping" />
+        <error line="515" column="42" source="standard:function-signature" />
+        <error line="515" column="50" source="standard:parameter-list-wrapping" />
+        <error line="515" column="50" source="standard:function-signature" />
+        <error line="515" column="67" source="standard:trailing-comma-on-declaration-site" />
     </file>
     <file name="src/com/portalhacks/frame/LocalDropServer.kt">
         <error line="40" column="5" source="standard:spacing-between-declarations-with-comments" />
@@ -408,63 +404,31 @@
     </file>
     <file name="src/com/portalhacks/frame/SettingsActivity.kt">
         <error line="3" column="1" source="standard:import-ordering" />
-        <error line="188" column="17" source="standard:function-naming" />
-        <error line="451" column="17" source="standard:function-naming" />
-        <error line="467" column="17" source="standard:function-naming" />
-        <error line="502" column="17" source="standard:function-naming" />
-        <error line="502" column="26" source="standard:function-signature" />
-        <error line="502" column="39" source="standard:function-signature" />
-        <error line="502" column="59" source="standard:function-signature" />
-        <error line="563" column="57" source="standard:argument-list-wrapping" />
-        <error line="572" column="39" source="standard:argument-list-wrapping" />
-        <error line="573" column="35" source="standard:argument-list-wrapping" />
-        <error line="578" column="53" source="standard:argument-list-wrapping" />
-        <error line="579" column="35" source="standard:argument-list-wrapping" />
-        <error line="596" column="57" source="standard:argument-list-wrapping" />
-        <error line="601" column="51" source="standard:argument-list-wrapping" />
-        <error line="601" column="69" source="standard:argument-list-wrapping" />
-        <error line="602" column="36" source="standard:multiline-expression-wrapping" />
-        <error line="621" column="17" source="standard:function-naming" />
-        <error line="699" column="17" source="standard:function-naming" />
-        <error line="720" column="17" source="standard:function-naming" />
-        <error line="758" column="17" source="standard:function-naming" />
+        <error line="186" column="17" source="standard:function-naming" />
+        <error line="450" column="17" source="standard:function-naming" />
+        <error line="466" column="17" source="standard:function-naming" />
+        <error line="501" column="17" source="standard:function-naming" />
+        <error line="501" column="26" source="standard:function-signature" />
+        <error line="501" column="39" source="standard:function-signature" />
+        <error line="501" column="59" source="standard:function-signature" />
+        <error line="629" column="17" source="standard:function-naming" />
+        <error line="707" column="17" source="standard:function-naming" />
+        <error line="728" column="17" source="standard:function-naming" />
+        <error line="766" column="17" source="standard:function-naming" />
     </file>
     <file name="src/com/portalhacks/frame/Slide.kt">
         </file>
     <file name="src/com/portalhacks/frame/SlideshowComposeActivity.kt">
         </file>
     <file name="src/com/portalhacks/frame/SlideshowController.kt">
-        <error line="159" column="5" source="standard:spacing-between-declarations-with-comments" />
-        <error line="837" column="32" source="standard:multiline-expression-wrapping" />
-        <error line="843" column="36" source="standard:multiline-expression-wrapping" />
-        <error line="866" column="57" source="standard:argument-list-wrapping" />
-        <error line="870" column="34" source="standard:function-signature" />
-        <error line="870" column="43" source="standard:function-signature" />
-        <error line="870" column="57" source="standard:function-signature" />
-        <error line="873" column="37" source="standard:statement-wrapping" />
-        <error line="873" column="50" source="standard:statement-wrapping" />
-        <error line="873" column="63" source="standard:statement-wrapping" />
-        <error line="891" column="42" source="standard:multiline-expression-wrapping" />
-        <error line="914" column="41" source="standard:statement-wrapping" />
-        <error line="922" column="50" source="standard:multiline-expression-wrapping" />
-        <error line="928" column="45" source="standard:statement-wrapping" />
-        <error line="950" column="55" source="standard:if-else-wrapping" />
-        <error line="950" column="57" source="standard:statement-wrapping" />
-        <error line="950" column="77" source="standard:statement-wrapping" />
-        <error line="950" column="98" source="standard:statement-wrapping" />
-        <error line="989" column="43" source="standard:if-else-wrapping" />
-        <error line="989" column="45" source="standard:statement-wrapping" />
-        <error line="989" column="66" source="standard:statement-wrapping" />
-        <error line="989" column="84" source="standard:statement-wrapping" />
-        <error line="989" column="95" source="standard:statement-wrapping" />
-        <error line="990" column="43" source="standard:if-else-wrapping" />
-        <error line="990" column="45" source="standard:statement-wrapping" />
-        <error line="990" column="62" source="standard:statement-wrapping" />
-        <error line="990" column="87" source="standard:statement-wrapping" />
-        <error line="1977" column="9" source="standard:blank-line-before-declaration" />
-        <error line="1979" column="1" source="standard:spacing-between-declarations-with-annotations" />
-        <error line="1979" column="9" source="standard:blank-line-before-declaration" />
-        <error line="2013" column="9" source="standard:spacing-between-declarations-with-comments" />
+        <error line="162" column="5" source="standard:spacing-between-declarations-with-comments" />
+        <error line="901" column="38" source="standard:function-signature" />
+        <error line="901" column="47" source="standard:function-signature" />
+        <error line="901" column="61" source="standard:function-signature" />
+        <error line="2043" column="9" source="standard:blank-line-before-declaration" />
+        <error line="2045" column="1" source="standard:spacing-between-declarations-with-annotations" />
+        <error line="2045" column="9" source="standard:blank-line-before-declaration" />
+        <error line="2079" column="9" source="standard:spacing-between-declarations-with-comments" />
     </file>
     <file name="src/com/portalhacks/frame/Theme.kt">
         <error line="38" column="17" source="standard:multiline-expression-wrapping" />

@@ -35,8 +35,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -189,6 +187,7 @@ class SettingsActivity : ComponentActivity() {
         val ctx = LocalContext.current
         var tick by remember { mutableIntStateOf(0) } // bump to recompose after pref writes
         resumeTick.intValue // read so returning from the scanner re-reads albums below
+        uploadTick.intValue // first local upload must also update the album selector
         tick // read so writes that bump it recompose
         // Only one tuning group is expanded at a time, so the "Customize" pane can't balloon.
         var openGroup by remember { mutableStateOf<String?>(null) }
@@ -198,7 +197,7 @@ class SettingsActivity : ComponentActivity() {
         // Card groups, so the layout can be one or two columns by available width.
         val sourceCards: @Composable () -> Unit = {
             Card("Playback & album selection") {
-                PlaybackControls { tick++ }
+                PlaybackControls(prefs, LocalUploads.count(this) > 0)
                 PrimaryBtn("Start slideshow") {
                     startActivity(
                         Intent(this, SlideshowComposeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP),
@@ -277,7 +276,7 @@ class SettingsActivity : ComponentActivity() {
                 ) {
                     DurationEditor { tick++ }
                     Divider()
-                    ToggleRow("Shuffle photos", ConfigReceiver.KEY_SHUFFLE, false) { tick++ }
+                    ToggleRow("Shuffle within Repeat album", ConfigReceiver.KEY_SHUFFLE, false) { tick++ }
                     Divider()
                     CycleRow("Transition", fadeLabel(getLong(ConfigReceiver.KEY_FADE_MS, 1200))) {
                         val next = cycle(FADE_CHOICES, getLong(ConfigReceiver.KEY_FADE_MS, 1200), 1)
@@ -560,7 +559,8 @@ class SettingsActivity : ComponentActivity() {
                 } else {
                     Text(
                         if (failed) "—" else "…",
-                        color = PortalColors.TextMuted, fontSize = 16.sp,
+                        color = PortalColors.TextMuted,
+                        fontSize = 16.sp,
                     )
                 }
             }
@@ -569,14 +569,18 @@ class SettingsActivity : ComponentActivity() {
                 Text(
                     title.ifEmpty { if (failed) "Couldn't load" else "Loading…" },
                     color = if (on) PortalColors.Text else PortalColors.TextMuted,
-                    fontSize = 17.sp, fontWeight = FontWeight.Bold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
                     providerLabel(url) + " · " + url,
-                    color = PortalColors.TextMuted, fontSize = 14.sp,
-                    maxLines = 1, overflow = TextOverflow.MiddleEllipsis,
+                    color = PortalColors.TextMuted,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.MiddleEllipsis,
                 )
                 Spacer(Modifier.height(8.dp))
                 // Stop/resume (keeps the album, just pauses it) + Remove (two-tap).
@@ -593,16 +597,20 @@ class SettingsActivity : ComponentActivity() {
                     Spacer(Modifier.width(10.dp))
                     Text(
                         if (on) "Playing" else "Stopped",
-                        color = PortalColors.TextMuted, fontSize = 14.sp,
+                        color = PortalColors.TextMuted,
+                        fontSize = 14.sp,
                     )
                     Spacer(Modifier.weight(1f))
                     Text(
                         if (armed) "Confirm" else "Remove",
-                        color = PortalColors.Red, fontSize = 15.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { if (!armed) armed = true else onRemove() }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        color = PortalColors.Red,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier =
+                            Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { if (!armed) armed = true else onRemove() }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
                     )
                 }
             }
@@ -799,81 +807,6 @@ class SettingsActivity : ComponentActivity() {
             Text("$value  ›", color = PortalColors.Blue, fontSize = 18.sp)
         }
     }
-
-    @Composable
-    private fun PlaybackControls(onChanged: () -> Unit) {
-        val mode =
-            PlaybackPolicy.Mode.entries.firstOrNull {
-                it.name == prefs.getString(ConfigReceiver.KEY_PLAYBACK_MODE, "SHUFFLE_ALL")
-            } ?: PlaybackPolicy.Mode.SHUFFLE_ALL
-        CycleRow(
-            "Playback mode",
-            when (mode) {
-                PlaybackPolicy.Mode.REPEAT_CURRENT -> "Repeat current album"
-                PlaybackPolicy.Mode.NEXT_ALBUM -> "Next album"
-                PlaybackPolicy.Mode.SHUFFLE_ALL -> "Shuffle all"
-            },
-        ) {
-            val next = PlaybackPolicy.Mode.entries[(mode.ordinal + 1) % PlaybackPolicy.Mode.entries.size]
-            prefs.edit().putString(ConfigReceiver.KEY_PLAYBACK_MODE, next.name).apply()
-            onChanged()
-        }
-        val selection = prefs.getString(ConfigReceiver.KEY_ORIENTATION, "AUTO") ?: "AUTO"
-        val orientations = listOf("AUTO", "LANDSCAPE", "PORTRAIT", "ALL")
-        CycleRow(
-            "Photo orientation",
-            when (selection) {
-                "LANDSCAPE" -> "Manual · Landscape"
-                "PORTRAIT" -> "Manual · Portrait"
-                "ALL" -> "All orientations"
-                else -> "Auto · follows tablet"
-            },
-        ) {
-            val next = orientations[(orientations.indexOf(selection).coerceAtLeast(0) + 1) % orientations.size]
-            prefs.edit().putString(ConfigReceiver.KEY_ORIENTATION, next).apply()
-            onChanged()
-        }
-        Body(
-            "Auto and Manual show whole matching photos without zoom, cropping or pairing. " +
-                "Square and unknown-size photos are excluded.",
-        )
-        AlbumSelector(onChanged)
-    }
-
-    @Composable
-    private fun AlbumSelector(onChanged: () -> Unit) {
-        val albums = Albums.enabled(prefs).toMutableList()
-        if (LocalUploads.count(this) > 0) albums.add(PlaybackPolicy.LOCAL_ALBUM)
-        val selected =
-            prefs.getString(ConfigReceiver.KEY_SELECTED_ALBUM, null)?.takeIf { it in albums }
-                ?: albums.firstOrNull()
-        var expanded by remember { mutableStateOf(false) }
-        Box {
-            Button(onClick = { expanded = true }, enabled = albums.isNotEmpty()) {
-                Text("Selected: " + albumLabel(selected))
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                albums.forEach { url ->
-                    DropdownMenuItem(text = { Text(albumLabel(url)) }, onClick = {
-                        prefs.edit().putString(ConfigReceiver.KEY_SELECTED_ALBUM, url).apply()
-                        expanded = false
-                        onChanged()
-                    })
-                }
-            }
-        }
-        Body(
-            "Selection is used by Repeat and Next album. " +
-                "Shuffle all mixes all enabled albums, including photos from phones.",
-        )
-    }
-
-    private fun albumLabel(url: String?): String =
-        when (url) {
-            null -> "No enabled albums"
-            PlaybackPolicy.LOCAL_ALBUM -> "Photos from phones"
-            else -> AlbumCache.title(prefs, url)?.takeIf { it.isNotBlank() } ?: url
-        }
 
     @Composable
     private fun DurationEditor(onChanged: () -> Unit) {

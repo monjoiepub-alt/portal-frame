@@ -68,3 +68,5 @@ is preserved (on resume and every 20 minutes while playback is visible), rather 
 background scheduling. An empty scraper response remains ambiguous and retains the previous
 cache to avoid destroying offline playback. Distinct image URLs for the same underlying
 photo cannot be deduplicated reliably without stable provider media identities.
+
+For the hardware-reported bug fixes and current gestures, see [TABLET_BUGFIX.md](TABLET_BUGFIX.md).

@@ -1,5 +1,6 @@
 [versions]
 junit = "4.13.2"
+robolectric = "4.16"
 agp = "8.13.2"
 kotlin = "2.4.0"
 composeBom = "2026.05.01"
@@ -9,6 +10,9 @@ detekt = "1.23.8"
 ktlint = "12.1.2"
 
 [libraries]
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 compose-ui = { group = "androidx.compose.ui", name = "ui" }

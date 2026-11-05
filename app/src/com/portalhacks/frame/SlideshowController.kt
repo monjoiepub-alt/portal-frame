@@ -58,7 +58,7 @@ import kotlin.math.min
  * Touch handling is distance-based (works for slow finger swipes):
  *   - drag left  -> next image
  *   - drag right -> previous image
- *   - tap        -> dismiss (runs onDismiss)
+ *   - tap thirds -> previous / pause-resume / next
  */
 class SlideshowController(
     private val context: Context,
@@ -102,11 +102,15 @@ class SlideshowController(
     private var shimmerHidden = false
 
     // User-tunable settings (read from prefs in the constructor; see PhotosActivity).
-    private val photoOrientation: String
+    private var photoOrientation: String
     private val strictFit: Boolean
     private val orderedAlbums: Boolean
+    private var navigation: ((TouchZones.Action) -> Unit)? = null
+    private var onPresented: ((Boolean) -> Unit)? = null
+    private var motionPaused = false
+    private var lastTap = Long.MIN_VALUE
+    private var noteEditing = false
     private var onCycle: (() -> Boolean)? = null
-    private var onItemFinished: ((String) -> Unit)? = null
     private val intervalMs: Long // time each slide is held
     private val autoFadeMs: Long // auto crossfade duration
     private val shuffle: Boolean // play photos in random order
@@ -135,7 +139,6 @@ class SlideshowController(
     private var curIsPair = false // current frame shows a paired (two-photo) composite
     private var running = false
     private var animGen = 0L
-    private var onDismiss: Runnable? = null
     private var onSettings: Runnable? = null
     private var clockOnly = false // low-light mode: black screen, clock only
 
@@ -526,8 +529,51 @@ class SlideshowController(
         shimmer.startSweep()
     }
 
-    fun setOnItemFinished(callback: (String) -> Unit) {
-        onItemFinished = callback
+    internal fun prepareAlbum(slides: List<Slide>): List<Slide> {
+        val result = ArrayList(slides)
+        if (onThisDay) promoteOnThisDay(result)
+        return result
+    }
+
+    internal fun manageNavigation(callback: (TouchZones.Action) -> Unit) {
+        navigation = callback
+    }
+
+    internal fun present(
+        slides: List<Slide>,
+        instant: Boolean,
+        callback: (Boolean) -> Unit,
+    ) {
+        onPresented = callback
+        setItemsShowing(slides, slides.first().id, instant)
+    }
+
+    internal fun viewport(
+        width: Int,
+        height: Int,
+        filter: String,
+    ) {
+        reqW = width.coerceAtLeast(1)
+        reqH = height.coerceAtLeast(1)
+        screenPortrait = reqH > reqW
+        photoOrientation = filter
+    }
+
+    internal fun freezeMotion(paused: Boolean) {
+        motionPaused = paused
+        if (paused) kbAnim?.pause() else kbAnim?.resume()
+    }
+
+    internal fun cancelPresentation() {
+        animGen++
+        front.animate().cancel()
+        front.alpha = 0f
+    }
+
+    internal fun editClock() = enterClockEdit()
+
+    internal fun editNote() {
+        noteEditing = true
     }
 
     fun setOnCycle(callback: () -> Boolean) {
@@ -541,10 +587,6 @@ class SlideshowController(
         items.clear()
         status.text = message
         startClock()
-    }
-
-    fun setOnDismiss(onDismiss: Runnable?) {
-        this.onDismiss = onDismiss
     }
 
     /** Long-press anywhere on the slideshow runs this (used to open Photos setup). */
@@ -766,20 +808,6 @@ class SlideshowController(
             .apply()
     }
 
-    /** True if (x,y) in root coords falls on the clock (its scaled bounds, padded for easy grab). */
-    private fun isOnClock(
-        x: Float,
-        y: Float,
-    ): Boolean {
-        if (clockBox.width == 0) return false
-        val pad = Ui.dp(context, 24f)
-        val cx = clockBox.left + clockBox.translationX + clockBox.width / 2f
-        val cy = clockBox.top + clockBox.translationY + clockBox.height / 2f
-        val halfW = clockBox.width / 2f * clockScale + pad
-        val halfH = clockBox.height / 2f * clockScale + pad
-        return x >= cx - halfW && x <= cx + halfW && y >= cy - halfH && y <= cy + halfH
-    }
-
     private fun enterClockEdit() {
         editingClock = true
         clockBox.background =
@@ -834,166 +862,193 @@ class SlideshowController(
 
     private fun buildTouchOverlay(): View {
         val overlay = View(context)
-        overlay.layoutParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT,
-        )
+        overlay.layoutParams =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            )
         overlay.isClickable = true
         overlay.isFocusable = true
-        overlay.setOnTouchListener(object : View.OnTouchListener {
-            private var downX = 0f
-            private var downY = 0f
-            private var downTime = 0L
-            private var lastX = 0f
-            private var lastY = 0f
-            private var handled = false
-            private var moved = false
-            private var pinching = false
-            private var pinchStartDist = 0f
-            private var pinchBaseScale = 1f
-            private var pendingLong: Runnable? = null
+        overlay.setOnTouchListener(
+            object : View.OnTouchListener {
+                private var downX = 0f
+                private var downY = 0f
+                private var downTime = 0L
+                private var lastX = 0f
+                private var lastY = 0f
+                private var handled = false
+                private var moved = false
+                private var pinching = false
+                private var pinchStartDist = 0f
+                private var pinchBaseScale = 1f
+                private var pendingLong: Runnable? = null
 
-            private fun cancelLong() {
-                pendingLong?.let {
-                    handler.removeCallbacks(it)
-                    pendingLong = null
-                }
-            }
-
-            private fun twoPointerDist(e: MotionEvent): Float {
-                if (e.pointerCount < 2) return 0f
-                return Math.hypot(
-                    (e.getX(0) - e.getX(1)).toDouble(), (e.getY(0) - e.getY(1)).toDouble(),
-                ).toFloat()
-            }
-
-            override fun onTouch(v: View, e: MotionEvent): Boolean {
-                when (e.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        downX = e.x; downY = e.y; lastX = e.x; lastY = e.y
-                        downTime = e.eventTime
-                        handled = false
-                        moved = false
-                        pinching = false
-                        v.parent?.requestDisallowInterceptTouchEvent(true)
-                        cancelLong()
-                        if (!editingClock && isOnNote(e.x, e.y)) {
-                            // Touch started on the note → drag it directly (no long-press); the
-                            // bin appears so it can be dropped there to dismiss.
-                            draggingNote = true
-                            showBin()
-                            return true
-                        }
-                        if (!editingClock) {
-                            // Long-press ON the clock → grab it for edit; elsewhere → settings.
-                            val onClock = isOnClock(e.x, e.y)
-                            if (onClock || onSettings != null) {
-                                val pl = Runnable {
-                                    pendingLong = null
-                                    handled = true // suppress the tap-dismiss on release
-                                    if (onClock) enterClockEdit() else onSettings?.run()
-                                }
-                                pendingLong = pl
-                                handler.postDelayed(pl, LONG_PRESS_MS)
-                            }
-                        }
-                        return true
+                private fun cancelLong() {
+                    pendingLong?.let {
+                        handler.removeCallbacks(it)
+                        pendingLong = null
                     }
-                    MotionEvent.ACTION_POINTER_DOWN -> {
-                        if (editingClock) {
+                }
+
+                private fun twoPointerDist(e: MotionEvent): Float {
+                    if (e.pointerCount < 2) return 0f
+                    return Math.hypot(
+                        (e.getX(0) - e.getX(1)).toDouble(),
+                        (e.getY(0) - e.getY(1)).toDouble(),
+                    ).toFloat()
+                }
+
+                override fun onTouch(v: View, e: MotionEvent): Boolean {
+                    when (e.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            downX = e.x
+                            downY = e.y
+                            lastX = e.x
+                            lastY = e.y
+                            downTime = e.eventTime
+                            handled = false
+                            moved = false
+                            pinching = false
+                            v.parent?.requestDisallowInterceptTouchEvent(true)
                             cancelLong()
-                            pinching = true
-                            pinchStartDist = twoPointerDist(e)
-                            pinchBaseScale = clockScale
-                        }
-                        return true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (draggingNote) {
-                            dragNoteBy(e.x - lastX, e.y - lastY)
-                            lastX = e.x; lastY = e.y
-                            updateBinHover()
+                            if (noteEditing && !editingClock && isOnNote(e.x, e.y)) {
+                                // Touch started on the note → drag it directly (no long-press); the
+                                // bin appears so it can be dropped there to dismiss.
+                                draggingNote = true
+                                showBin()
+                                return true
+                            }
+                            if (!editingClock && onSettings != null) {
+                                val menu =
+                                    Runnable {
+                                        pendingLong = null
+                                        handled = true
+                                        onSettings?.run()
+                                    }
+                                pendingLong = menu
+                                handler.postDelayed(menu, LONG_PRESS_MS)
+                            }
                             return true
                         }
-                        if (editingClock) {
-                            if (pinching && e.pointerCount >= 2) {
-                                val d = twoPointerDist(e)
-                                if (pinchStartDist > 0f) {
-                                    clockScale = (pinchBaseScale * d / pinchStartDist)
-                                        .coerceIn(CLOCK_SCALE_MIN, CLOCK_SCALE_MAX)
-                                    applyClockScale()
+                        MotionEvent.ACTION_POINTER_DOWN -> {
+                            handled = true // A multi-touch gesture must never become a zone tap.
+                            cancelLong()
+                            if (editingClock) {
+                                pinching = true
+                                pinchStartDist = twoPointerDist(e)
+                                pinchBaseScale = clockScale
+                            }
+                            return true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            if (draggingNote) {
+                                dragNoteBy(e.x - lastX, e.y - lastY)
+                                lastX = e.x
+                                lastY = e.y
+                                updateBinHover()
+                                return true
+                            }
+                            if (editingClock) {
+                                if (pinching && e.pointerCount >= 2) {
+                                    val d = twoPointerDist(e)
+                                    if (pinchStartDist > 0f) {
+                                        clockScale =
+                                            (pinchBaseScale * d / pinchStartDist)
+                                                .coerceIn(CLOCK_SCALE_MIN, CLOCK_SCALE_MAX)
+                                        applyClockScale()
+                                    }
+                                } else {
+                                    dragClockBy(e.x - lastX, e.y - lastY)
+                                    lastX = e.x
+                                    lastY = e.y
+                                    if (abs(e.x - downX) > TAP_SLOP || abs(e.y - downY) > TAP_SLOP) moved = true
                                 }
-                            } else {
-                                dragClockBy(e.x - lastX, e.y - lastY)
-                                lastX = e.x; lastY = e.y
-                                if (abs(e.x - downX) > TAP_SLOP || abs(e.y - downY) > TAP_SLOP) moved = true
+                            } else if (!handled) {
+                                val dx = e.x - downX
+                                val dy = e.y - downY
+                                if (abs(dx) > TAP_SLOP || abs(dy) > TAP_SLOP) {
+                                    cancelLong() // finger moved — not a long press
+                                }
+                                if (abs(dx) > SWIPE_MIN_DISTANCE && abs(dx) > abs(dy)) {
+                                    handled = true
+                                    if (dx < 0) showNext() else showPrevious()
+                                }
                             }
-                        } else if (!handled) {
-                            val dx = e.x - downX
-                            val dy = e.y - downY
-                            if (abs(dx) > TAP_SLOP || abs(dy) > TAP_SLOP) {
-                                cancelLong() // finger moved — not a long press
-                            }
-                            if (abs(dx) > SWIPE_MIN_DISTANCE && abs(dx) > abs(dy)) {
-                                handled = true
-                                if (dx < 0) showNext() else showPrevious()
-                            }
-                        }
-                        return true
-                    }
-                    MotionEvent.ACTION_POINTER_UP -> {
-                        if (editingClock && pinching) {
-                            persistClockTransform()
-                            pinching = false
-                            // Continue dragging with whichever pointer remains (avoid a jump).
-                            val rem = if (e.actionIndex == 0) 1 else 0
-                            if (e.pointerCount > rem) { lastX = e.getX(rem); lastY = e.getY(rem) }
-                            moved = true
-                        }
-                        return true
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        cancelLong()
-                        if (draggingNote) {
-                            draggingNote = false
-                            if (noteOverBin()) dismissNote() else persistNotePos()
-                            hideBin()
                             return true
                         }
-                        if (editingClock) {
-                            val dt = e.eventTime - downTime
-                            if (!moved && !pinching && abs(e.x - downX) < TAP_SLOP &&
-                                abs(e.y - downY) < TAP_SLOP && dt < TAP_TIMEOUT_MS
-                            ) {
-                                exitClockEdit() // a clean tap finishes editing
-                            } else {
-                                persistClockTransform() // a drag/pinch ended — stay in edit mode
+                        MotionEvent.ACTION_POINTER_UP -> {
+                            if (editingClock && pinching) {
+                                persistClockTransform()
+                                pinching = false
+                                // Continue dragging with whichever pointer remains (avoid a jump).
+                                val rem = if (e.actionIndex == 0) 1 else 0
+                                if (e.pointerCount > rem) {
+                                    lastX = e.getX(rem)
+                                    lastY = e.getY(rem)
+                                }
+                                moved = true
                             }
-                            pinching = false
-                        } else if (!handled) {
-                            val dx = e.x - downX
-                            val dy = e.y - downY
-                            val dt = e.eventTime - downTime
-                            if (abs(dx) > SWIPE_MIN_DISTANCE && abs(dx) > abs(dy)) {
-                                if (dx < 0) showNext() else showPrevious()
-                            } else if (abs(dx) < TAP_SLOP && abs(dy) < TAP_SLOP &&
-                                dt < TAP_TIMEOUT_MS && onDismiss != null
-                            ) {
-                                onDismiss?.run()
-                            }
+                            return true
                         }
-                        return true
+                        MotionEvent.ACTION_UP -> {
+                            cancelLong()
+                            if (draggingNote) {
+                                draggingNote = false
+                                noteEditing = false
+                                if (noteOverBin()) dismissNote() else persistNotePos()
+                                hideBin()
+                                return true
+                            }
+                            if (editingClock) {
+                                val dt = e.eventTime - downTime
+                                if (!moved && !pinching && abs(e.x - downX) < TAP_SLOP &&
+                                    abs(e.y - downY) < TAP_SLOP && dt < TAP_TIMEOUT_MS
+                                ) {
+                                    exitClockEdit() // a clean tap finishes editing
+                                } else {
+                                    persistClockTransform() // a drag/pinch ended — stay in edit mode
+                                }
+                                pinching = false
+                            } else if (!handled) {
+                                val dx = e.x - downX
+                                val dy = e.y - downY
+                                val dt = e.eventTime - downTime
+                                if (abs(dx) > SWIPE_MIN_DISTANCE && abs(dx) > abs(dy)) {
+                                    if (dx < 0) showNext() else showPrevious()
+                                } else if (abs(dx) < TAP_SLOP && abs(dy) < TAP_SLOP &&
+                                    dt < TAP_TIMEOUT_MS
+                                ) {
+                                    if (lastTap == Long.MIN_VALUE || e.eventTime - lastTap >= 300L) {
+                                        lastTap = e.eventTime
+                                        val action = TouchZones.action(e.x, v.width)
+                                        when (action) {
+                                            TouchZones.Action.PREVIOUS -> showPrevious()
+                                            TouchZones.Action.NEXT -> showNext()
+                                            TouchZones.Action.PAUSE -> navigation?.invoke(action)
+                                        }
+                                    }
+                                }
+                            }
+                            return true
+                        }
+                        MotionEvent.ACTION_CANCEL -> {
+                            cancelLong()
+                            if (draggingNote) {
+                                draggingNote = false
+                                persistNotePos()
+                                hideBin()
+                            }
+                            if (editingClock) {
+                                pinching = false
+                                persistClockTransform()
+                            }
+                            return true
+                        }
+                        else -> return true
                     }
-                    MotionEvent.ACTION_CANCEL -> {
-                        cancelLong()
-                        if (draggingNote) { draggingNote = false; persistNotePos(); hideBin() }
-                        if (editingClock) { pinching = false; persistClockTransform() }
-                        return true
-                    }
-                    else -> return true
                 }
-            }
-        })
+            },
+        )
         return overlay
     }
 
@@ -1137,10 +1192,10 @@ class SlideshowController(
             return
         }
         items = ArrayList(newItems)
-        if (shuffle) {
+        if (navigation == null && shuffle) {
             smartShuffle(items)
         }
-        if (onThisDay) {
+        if (navigation == null && onThisDay) {
             promoteOnThisDay(items)
         }
         remote = true
@@ -1181,10 +1236,10 @@ class SlideshowController(
             return
         }
         items = ArrayList(newItems)
-        if (shuffle) {
+        if (navigation == null && shuffle) {
             smartShuffle(items)
         }
-        if (onThisDay) {
+        if (navigation == null && onThisDay) {
             promoteOnThisDay(items)
         }
         remote = true
@@ -1218,6 +1273,10 @@ class SlideshowController(
     fun currentId(): String? = items.getOrNull(index)?.id
 
     fun showNext() {
+        navigation?.let {
+            it(TouchZones.Action.NEXT)
+            return
+        }
         if (items.isNotEmpty()) {
             val next = nextStart(index, curIsPair)
             if (next <= index && onCycle?.invoke() == true) return
@@ -1226,12 +1285,17 @@ class SlideshowController(
     }
 
     fun showPrevious() {
+        navigation?.let {
+            it(TouchZones.Action.PREVIOUS)
+            return
+        }
         if (items.isNotEmpty()) {
             transitionTo((index - 1 + items.size) % items.size, SWIPE_FADE_MS)
         }
     }
 
     private fun scheduleAuto() {
+        if (navigation != null) return // The host owns the only slideshow timer.
         handler.removeCallbacks(autoTick)
         if (running && (items.size > 1 || onCycle != null)) {
             handler.postDelayed(autoTick, intervalMs)
@@ -1289,7 +1353,7 @@ class SlideshowController(
                     back.colorFilter = enhanceFilter
                 }
                 // Failed loads are skipped for album traversal rather than blocking it forever.
-                onItemFinished?.invoke(items[i].id)
+                onPresented?.invoke(b != null)
                 prefetchNext(nextStart(i, isPair))
                 scheduleAuto()
             }
@@ -1318,7 +1382,7 @@ class SlideshowController(
                     return@Callback // superseded by a newer request
                 }
                 if (bmp == null) {
-                    onItemFinished?.invoke(items[next].id)
+                    onPresented?.invoke(false)
                     index = next
                     curIsPair = isPair
                     scheduleAuto()
@@ -1352,7 +1416,7 @@ class SlideshowController(
                     front.alpha = 0f
                     applyKenBurnsStart(front, null) // reset incoming view for reuse
                     front.colorFilter = null
-                    onItemFinished?.invoke(items[next].id)
+                    onPresented?.invoke(true)
                     startKenBurnsOnBack(gen)
                     updateAmbient(bmp)
                     prefetchNext(nextStart(next, isPair))
@@ -1376,6 +1440,7 @@ class SlideshowController(
         if (!pairs || items.size < 2 || start < 0 || start >= items.size) {
             return -1
         }
+        if (navigation != null && start == 0 && items.size == 2) return 1
         if (items[start].portrait == screenPortrait) {
             return -1 // already fills the screen on its own
         }
@@ -1470,6 +1535,7 @@ class SlideshowController(
         }
         kbAnim = a
         a.start()
+        if (motionPaused) a.pause()
     }
 
     /** Build the path for the slide just loaded (face-biased when available). */

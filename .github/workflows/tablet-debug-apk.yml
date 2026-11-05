@@ -1,4 +1,4 @@
-name: Tablet phase 1 debug APK
+name: Tablet debug APK
 
 on:
   push:
@@ -50,8 +50,14 @@ jobs:
           echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
 
-      - name: Build the debug APK
-        run: ./gradlew assembleDebug --no-daemon --max-workers=2 --stacktrace
+      - name: Restore the development debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: frame-tablet-debug-signing-v1
+
+      - name: Build and validate the debug APK
+        run: ./gradlew assembleDebug testDebugUnitTest lintDebug detekt ktlintCheck --no-daemon --max-workers=2 --stacktrace
 
       - name: Verify and package the APK
         shell: bash
@@ -61,15 +67,28 @@ jobs:
           test -s "$apk"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
           mkdir -p artifact
-          cp "$apk" artifact/Frame-phase1-debug.apk
+          cp "$apk" artifact/Frame-tablet-fix-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk" > artifact/signing-certificate.txt
+          printf 'Commit: %s\nVersion: 1.2.1-tablet (15)\n' "$GITHUB_SHA" > artifact/build-info.txt
           cd artifact
-          sha256sum Frame-phase1-debug.apk > Frame-phase1-debug.apk.sha256
+          sha256sum Frame-tablet-fix-debug.apk > Frame-tablet-fix-debug.apk.sha256
 
       - name: Upload the downloadable debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: Frame-phase1-debug
+          name: Frame-tablet-fix-debug
           path: artifact/
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+      - name: Upload validation reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tablet-validation-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14

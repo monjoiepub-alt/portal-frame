@@ -119,6 +119,13 @@ class ImageLoader(context: Context) {
         }
     }
 
+    internal fun hasCachedSource(id: String): Boolean =
+        when {
+            id.startsWith("https://") -> File(cacheDir, md5(id) + ".img").let { it.isFile && it.length() > 0 }
+            id.startsWith("/") -> File(id).isFile
+            else -> true
+        }
+
     /** Read source bounds without allocating a bitmap. Reuses the existing disk download. */
     fun dimensions(slide: Slide): Slide {
         return try {
@@ -138,6 +145,9 @@ class ImageLoader(context: Context) {
                     }
             } else {
                 ctx.assets.open(slide.id).use { BitmapFactory.decodeStream(it, null, options) }
+            }
+            if (slide.id.startsWith("https://") && (options.outWidth <= 0 || options.outHeight <= 0)) {
+                file?.delete() // A corrupt remote cache is replaceable; never delete a local upload.
             }
             val (w, h) = PlaybackPolicy.displayDimensions(options.outWidth, options.outHeight, rotation)
             Slide(slide.id, slide.caption, slide.timeMs, h > w, w, h)
@@ -517,7 +527,10 @@ class ImageLoader(context: Context) {
             val bh = max(1, h / 16)
             val small = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
             Canvas(small).drawBitmap(
-                src, centerCropRect(src.width, src.height, bw, bh), Rect(0, 0, bw, bh), p
+                src,
+                centerCropRect(src.width, src.height, bw, bh),
+                Rect(0, 0, bw, bh),
+                p,
             )
             boxBlur(small, 3, 2)
             c.drawBitmap(small, Rect(0, 0, bw, bh), dst, p)
