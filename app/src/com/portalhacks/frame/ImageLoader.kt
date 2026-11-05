@@ -34,10 +34,11 @@ import kotlin.math.roundToInt
  * the screen size. A small in-memory LRU caches recently shown bitmaps.
  */
 class ImageLoader(context: Context) {
-
     fun interface Callback {
         fun onLoaded(b: Bitmap?)
     }
+
+    internal var onDimensions: ((Slide) -> Unit)? = null
 
     private val ctx: Context = context.applicationContext
     private val io: ExecutorService = Executors.newFixedThreadPool(2)
@@ -47,11 +48,15 @@ class ImageLoader(context: Context) {
 
     init {
         val maxKb = (Runtime.getRuntime().maxMemory() / 1024).toInt()
-        mem = object : LruCache<String, Bitmap>(maxKb / 6) {
-            override fun sizeOf(key: String, value: Bitmap): Int {
-                return value.byteCount / 1024
+        mem =
+            object : LruCache<String, Bitmap>(maxKb / 6) {
+                override fun sizeOf(
+                    key: String,
+                    value: Bitmap,
+                ): Int {
+                    return value.byteCount / 1024
+                }
             }
-        }
         cacheDir = File(ctx.cacheDir, "photos")
         cacheDir.mkdirs()
     }
@@ -64,18 +69,27 @@ class ImageLoader(context: Context) {
     /** Stop the background pool. Call from an owning Activity's onDestroy so its two
      *  worker threads don't leak each time the screen is opened and closed. */
     fun shutdown() {
-        io.shutdown()
+        io.shutdownNow()
     }
 
-    fun load(id: String, reqW: Int, reqH: Int, zoomFill: Boolean, cb: Callback) {
-        val key = fillKey(id, zoomFill)
+    fun load(
+        id: String,
+        reqW: Int,
+        reqH: Int,
+        zoomFill: Boolean,
+        cb: Callback,
+        strictFit: Boolean = false,
+        orientation: String = "AUTO",
+    ) {
+        if (io.isShutdown) return
+        val key = fillKey(id, zoomFill, reqW, reqH) + "|$strictFit|$orientation"
         val cached = mem.get(key)
         if (cached != null) {
             cb.onLoaded(cached)
             return
         }
         io.execute {
-            val bmp = loadSync(id, reqW, reqH, zoomFill)
+            val bmp = loadSync(id, reqW, reqH, zoomFill, strictFit, orientation)
             if (bmp != null) {
                 mem.put(key, bmp)
             }
@@ -84,26 +98,92 @@ class ImageLoader(context: Context) {
     }
 
     /** Warm the cache for an id without a UI callback. */
-    fun prefetch(id: String, reqW: Int, reqH: Int, zoomFill: Boolean) {
-        val key = fillKey(id, zoomFill)
+    fun prefetch(
+        id: String,
+        reqW: Int,
+        reqH: Int,
+        zoomFill: Boolean,
+        strictFit: Boolean = false,
+        orientation: String = "AUTO",
+    ) {
+        if (io.isShutdown) return
+        val key = fillKey(id, zoomFill, reqW, reqH) + "|$strictFit|$orientation"
         if (mem.get(key) != null) {
             return
         }
         io.execute {
-            val b = loadSync(id, reqW, reqH, zoomFill)
+            val b = loadSync(id, reqW, reqH, zoomFill, strictFit, orientation)
             if (b != null) {
                 mem.put(key, b)
             }
         }
     }
 
-    /** Cache key that distinguishes the two fill modes (zoom-crop vs whole photo + blur). */
-    private fun fillKey(id: String, zoomFill: Boolean): String = if (zoomFill) "$id|z" else "$id|f"
-
-    private fun loadSync(id: String, reqW: Int, reqH: Int, zoomFill: Boolean): Bitmap? {
+    /** Read source bounds without allocating a bitmap. Reuses the existing disk download. */
+    fun dimensions(slide: Slide): Slide {
         return try {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            val file = sourceFile(slide.id)
+            if (slide.id.startsWith("https://") && file == null) return slide
+            var rotation = ExifInterface.ORIENTATION_NORMAL
+            if (file != null) {
+                BitmapFactory.decodeFile(file.path, options)
+                rotation =
+                    try {
+                        ExifInterface(file).getAttributeInt(
+                            ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL,
+                        )
+                    } catch (_: java.io.IOException) {
+                        ExifInterface.ORIENTATION_NORMAL
+                    }
+            } else {
+                ctx.assets.open(slide.id).use { BitmapFactory.decodeStream(it, null, options) }
+            }
+            val (w, h) = PlaybackPolicy.displayDimensions(options.outWidth, options.outHeight, rotation)
+            Slide(slide.id, slide.caption, slide.timeMs, h > w, w, h)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not determine image dimensions", e)
+            slide
+        }
+    }
+
+    private fun sourceFile(id: String): File? =
+        when {
+            id.startsWith("https://") ->
+                File(cacheDir, md5(id) + ".img").takeIf {
+                    (it.exists() && it.length() > 0L) || download(id, it)
+                }
+            id.startsWith("/") -> File(id)
+            else -> null
+        }
+
+    /** Cache key that distinguishes the two fill modes (zoom-crop vs whole photo + blur). */
+    private fun fillKey(
+        id: String,
+        zoomFill: Boolean,
+        width: Int,
+        height: Int,
+    ): String = "$id|$zoomFill|$width|$height"
+
+    private fun loadSync(
+        id: String,
+        reqW: Int,
+        reqH: Int,
+        zoomFill: Boolean,
+        strictFit: Boolean,
+        orientation: String,
+    ): Bitmap? {
+        return try {
+            if (strictFit) {
+                val bounds = dimensions(Slide(id, null))
+                main.post { onDimensions?.invoke(bounds) }
+                val filter =
+                    PlaybackPolicy.Orientation.entries.firstOrNull { it.name == orientation }
+                        ?: PlaybackPolicy.Orientation.AUTO
+                if (!PlaybackPolicy.matches(bounds, filter, reqH > reqW)) return null
+            }
             val raw = decodeRaw(id, reqW, reqH) ?: return null
-            composeFill(raw, reqW, reqH, zoomFill)
+            composeFill(raw, reqW, reqH, zoomFill, strictFit)
         } catch (e: Exception) {
             Log.e(TAG, "load failed $id", e)
             null
@@ -112,7 +192,11 @@ class ImageLoader(context: Context) {
 
     /** Decode the source bitmap (downloading + disk-caching remote ids first). */
     @Throws(Exception::class)
-    private fun decodeRaw(id: String, reqW: Int, reqH: Int): Bitmap? {
+    private fun decodeRaw(
+        id: String,
+        reqW: Int,
+        reqH: Int,
+    ): Bitmap? {
         if (id.startsWith("http")) {
             val f = File(cacheDir, md5(id) + ".img")
             if (!f.exists() || f.length() == 0L) {
@@ -120,7 +204,7 @@ class ImageLoader(context: Context) {
                     return null
                 }
             }
-            return decodeFile(f.absolutePath, reqW, reqH)
+            return decodeFile(f.absolutePath, reqW, reqH, applyExif = true)
         }
         // Locally-pushed photos (the "AirDrop for Portal" drop) are absolute file paths
         // under filesDir/uploads — decode them straight off disk, honoring their EXIF
@@ -137,12 +221,16 @@ class ImageLoader(context: Context) {
      * failure so the caller can skip the pair.
      */
     fun loadPair(
-        id1: String, id2: String,
-        reqW: Int, reqH: Int, stackVertical: Boolean, cb: Callback
+        id1: String,
+        id2: String,
+        reqW: Int,
+        reqH: Int,
+        stackVertical: Boolean,
+        cb: Callback,
     ) {
         // A paired photo only gets half the screen, so it's always center-cropped to fill its
         // half — the "zoom to fill" setting applies only to single, full-screen photos.
-        val key = "$id1|$id2|${if (stackVertical) "v" else "h"}"
+        val key = "$id1|$id2|$reqW|$reqH|${if (stackVertical) "v" else "h"}"
         val cached = mem.get(key)
         if (cached != null) {
             cb.onLoaded(cached)
@@ -181,7 +269,12 @@ class ImageLoader(context: Context) {
         }
     }
 
-    private fun decodeFile(path: String, reqW: Int, reqH: Int, applyExif: Boolean = false): Bitmap? {
+    private fun decodeFile(
+        path: String,
+        reqW: Int,
+        reqH: Int,
+        applyExif: Boolean = false,
+    ): Bitmap? {
         val o = BitmapFactory.Options()
         o.inJustDecodeBounds = true
         BitmapFactory.decodeFile(path, o)
@@ -196,14 +289,19 @@ class ImageLoader(context: Context) {
      * their rotation in EXIF (the raw pixels are unrotated) and BitmapFactory ignores it, so
      * without this a portrait photo pushed from a phone shows up sideways.
      */
-    private fun applyExifOrientation(bmp: Bitmap, path: String): Bitmap {
-        val orientation = try {
-            ExifInterface(path).getAttributeInt(
-                ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL,
-            )
-        } catch (e: Exception) {
-            ExifInterface.ORIENTATION_NORMAL
-        }
+    private fun applyExifOrientation(
+        bmp: Bitmap,
+        path: String,
+    ): Bitmap? {
+        val orientation =
+            try {
+                ExifInterface(path).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL,
+                )
+            } catch (e: Exception) {
+                ExifInterface.ORIENTATION_NORMAL
+            }
         val m = Matrix()
         when (orientation) {
             ExifInterface.ORIENTATION_ROTATE_90 -> m.postRotate(90f)
@@ -211,8 +309,14 @@ class ImageLoader(context: Context) {
             ExifInterface.ORIENTATION_ROTATE_270 -> m.postRotate(270f)
             ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> m.postScale(-1f, 1f)
             ExifInterface.ORIENTATION_FLIP_VERTICAL -> m.postScale(1f, -1f)
-            ExifInterface.ORIENTATION_TRANSPOSE -> { m.postRotate(90f); m.postScale(-1f, 1f) }
-            ExifInterface.ORIENTATION_TRANSVERSE -> { m.postRotate(270f); m.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                m.postRotate(90f)
+                m.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                m.postRotate(270f)
+                m.postScale(-1f, 1f)
+            }
             else -> return bmp // normal / undefined — nothing to do
         }
         return try {
@@ -220,28 +324,38 @@ class ImageLoader(context: Context) {
             if (rotated != bmp) bmp.recycle()
             rotated
         } catch (e: Throwable) {
-            // Throwable, not Exception: createBitmap can throw OutOfMemoryError (an Error).
-            // Fall back to the unrotated bitmap rather than crashing the process.
-            bmp
+            // Never display an incorrectly oriented fallback when rotation allocation fails.
+            Log.w(TAG, "could not apply EXIF orientation", e)
+            bmp.recycle()
+            null
         }
     }
 
     @Throws(Exception::class)
-    private fun decodeAsset(assetPath: String, reqW: Int, reqH: Int): Bitmap? {
+    private fun decodeAsset(
+        assetPath: String,
+        reqW: Int,
+        reqH: Int,
+    ): Bitmap? {
         val o = BitmapFactory.Options()
         o.inJustDecodeBounds = true
-        var `in` = ctx.assets.open(assetPath)
-        BitmapFactory.decodeStream(`in`, null, o)
-        `in`.close()
+        var input = ctx.assets.open(assetPath)
+        BitmapFactory.decodeStream(input, null, o)
+        input.close()
         o.inSampleSize = sampleSize(o.outWidth, o.outHeight, reqW, reqH)
         o.inJustDecodeBounds = false
-        `in` = ctx.assets.open(assetPath)
-        val b = BitmapFactory.decodeStream(`in`, null, o)
-        `in`.close()
+        input = ctx.assets.open(assetPath)
+        val b = BitmapFactory.decodeStream(input, null, o)
+        input.close()
         return b
     }
 
-    private fun sampleSize(w: Int, h: Int, reqW: Int, reqH: Int): Int {
+    private fun sampleSize(
+        w: Int,
+        h: Int,
+        reqW: Int,
+        reqH: Int,
+    ): Int {
         if (reqW <= 0 || reqH <= 0 || w <= 0 || h <= 0) {
             return 1
         }
@@ -249,10 +363,17 @@ class ImageLoader(context: Context) {
         while (w / (s * 2) >= reqW && h / (s * 2) >= reqH) {
             s *= 2
         }
+        // Bound intermediate allocations for large panoramas and camera originals.
+        while ((w.toLong() / s) * (h.toLong() / s) > 8_000_000L) s *= 2
         return s
     }
 
-    private fun download(urlStr: String?, dest: File): Boolean {
+    @Synchronized
+    private fun download(
+        urlStr: String?,
+        dest: File,
+    ): Boolean {
+        if (dest.exists() && dest.length() > 0L) return true
         if (urlStr == null || !urlStr.startsWith("https://")) {
             Log.w(TAG, "refusing non-HTTPS image URL")
             return false
@@ -270,16 +391,16 @@ class ImageLoader(context: Context) {
                 return false
             }
             val tmp = File(dest.absolutePath + ".tmp")
-            val `in` = BufferedInputStream(c.inputStream)
+            val input = BufferedInputStream(c.inputStream)
             val out = FileOutputStream(tmp)
             val buf = ByteArray(8192)
             var n: Int
             var total = 0
-            while (`in`.read(buf).also { n = it } != -1) {
+            while (input.read(buf).also { n = it } != -1) {
                 total += n
                 if (total > MAX_IMAGE_BYTES) {
                     out.close()
-                    `in`.close()
+                    input.close()
                     tmp.delete()
                     Log.w(TAG, "image exceeds $MAX_IMAGE_BYTES bytes: $urlStr")
                     return false
@@ -288,7 +409,7 @@ class ImageLoader(context: Context) {
             }
             out.flush()
             out.close()
-            `in`.close()
+            input.close()
             return tmp.renameTo(dest)
         } catch (e: Exception) {
             Log.e(TAG, "download failed $urlStr", e)
@@ -301,8 +422,9 @@ class ImageLoader(context: Context) {
     companion object {
         private const val TAG = "PortalFrame"
 
-        const val UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        const val UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
         // Cap a single image download so a hostile/oversized response can't fill the
         // cache disk or blow up decoding (a photo thumbnail is well under this).
@@ -312,14 +434,25 @@ class ImageLoader(context: Context) {
          * Compose [src] into a screen-sized frame. [zoomFill] = center-crop to fill (zoom in,
          * cropping the overflow); otherwise the whole photo fit-centred over a blurred fill.
          */
-        private fun composeFill(src: Bitmap?, screenW: Int, screenH: Int, zoomFill: Boolean): Bitmap? {
+        private fun composeFill(
+            src: Bitmap?,
+            screenW: Int,
+            screenH: Int,
+            zoomFill: Boolean,
+            strictFit: Boolean,
+        ): Bitmap? {
             if (src == null || screenW <= 0 || screenH <= 0) {
                 return src
             }
             val out = Bitmap.createBitmap(screenW, screenH, Bitmap.Config.ARGB_8888)
             val c = Canvas(out)
             val p = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
-            drawComposed(c, p, src, 0, 0, screenW, screenH, zoomFill)
+            if (strictFit) {
+                c.drawColor(Color.BLACK)
+                c.drawBitmap(src, null, fitCenterRect(src.width, src.height, screenW, screenH), p)
+            } else {
+                drawComposed(c, p, src, 0, 0, screenW, screenH, zoomFill)
+            }
             if (src != out) {
                 src.recycle()
             }
@@ -333,7 +466,11 @@ class ImageLoader(context: Context) {
          * screen); otherwise side-by-side. Recycles [a]/[b].
          */
         private fun composePair(
-            a: Bitmap, b: Bitmap, screenW: Int, screenH: Int, stackVertical: Boolean
+            a: Bitmap,
+            b: Bitmap,
+            screenW: Int,
+            screenH: Int,
+            stackVertical: Boolean,
         ): Bitmap {
             val out = Bitmap.createBitmap(screenW, screenH, Bitmap.Config.ARGB_8888)
             val c = Canvas(out)
@@ -359,7 +496,7 @@ class ImageLoader(context: Context) {
         }
 
         /**
-         * Draw [src] into the rect ([left],[top],[w]×[h]). [zoomFill] = center-crop to FILL the
+         * Draw [src] into the rect ([left], [top], [w]×[h]). [zoomFill] = center-crop to FILL the
          * rect (zoom in, crop the overflow). Otherwise the whole photo is fit-centred (never
          * cropped) over a blurred, center-cropped fill behind a gentle scrim. Does not recycle [src].
          */
@@ -396,7 +533,12 @@ class ImageLoader(context: Context) {
             c.drawBitmap(src, null, fc, p)
         }
 
-        private fun centerCropRect(sw: Int, sh: Int, dw: Int, dh: Int): Rect {
+        private fun centerCropRect(
+            sw: Int,
+            sh: Int,
+            dw: Int,
+            dh: Int,
+        ): Rect {
             val srcA = sw / sh.toFloat()
             val dstA = dw / dh.toFloat()
             val cw: Int
@@ -417,7 +559,12 @@ class ImageLoader(context: Context) {
             return Rect(cx, cy, cx + cw, cy + ch)
         }
 
-        private fun fitCenterRect(sw: Int, sh: Int, dw: Int, dh: Int): RectF {
+        private fun fitCenterRect(
+            sw: Int,
+            sh: Int,
+            dw: Int,
+            dh: Int,
+        ): RectF {
             val scale = min(dw / sw.toFloat(), dh / sh.toFloat())
             val w = sw * scale
             val h = sh * scale
@@ -426,7 +573,11 @@ class ImageLoader(context: Context) {
             return RectF(left, top, left + w, top + h)
         }
 
-        private fun boxBlur(bmp: Bitmap, radius: Int, passes: Int) {
+        private fun boxBlur(
+            bmp: Bitmap,
+            radius: Int,
+            passes: Int,
+        ) {
             val w = bmp.width
             val h = bmp.height
             if (w <= 0 || h <= 0) {
@@ -442,7 +593,13 @@ class ImageLoader(context: Context) {
             bmp.setPixels(a, 0, w, 0, 0, w, h)
         }
 
-        private fun boxH(`in`: IntArray, out: IntArray, w: Int, h: Int, r: Int) {
+        private fun boxH(
+            input: IntArray,
+            out: IntArray,
+            w: Int,
+            h: Int,
+            r: Int,
+        ) {
             for (y in 0 until h) {
                 val row = y * w
                 for (x in 0 until w) {
@@ -454,7 +611,7 @@ class ImageLoader(context: Context) {
                     val x0 = max(0, x - r)
                     val x1 = min(w - 1, x + r)
                     for (xx in x0..x1) {
-                        val c = `in`[row + xx]
+                        val c = input[row + xx]
                         aa += (c ushr 24) and 0xff
                         rr += (c shr 16) and 0xff
                         gg += (c shr 8) and 0xff
@@ -467,7 +624,13 @@ class ImageLoader(context: Context) {
             }
         }
 
-        private fun boxV(`in`: IntArray, out: IntArray, w: Int, h: Int, r: Int) {
+        private fun boxV(
+            input: IntArray,
+            out: IntArray,
+            w: Int,
+            h: Int,
+            r: Int,
+        ) {
             for (x in 0 until w) {
                 for (y in 0 until h) {
                     var aa = 0
@@ -478,7 +641,7 @@ class ImageLoader(context: Context) {
                     val y0 = max(0, y - r)
                     val y1 = min(h - 1, y + r)
                     for (yy in y0..y1) {
-                        val c = `in`[yy * w + x]
+                        val c = input[yy * w + x]
                         aa += (c ushr 24) and 0xff
                         rr += (c shr 16) and 0xff
                         gg += (c shr 8) and 0xff

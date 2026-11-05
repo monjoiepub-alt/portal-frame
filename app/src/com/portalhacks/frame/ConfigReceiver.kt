@@ -19,7 +19,6 @@ import android.util.Log
  *   adb shell am broadcast -n com.portalhacks.frame/.ConfigReceiver --es url ""
  */
 class ConfigReceiver : BroadcastReceiver() {
-
     override fun onReceive(ctx: Context, intent: Intent?) {
         if (intent == null) {
             return
@@ -117,23 +116,27 @@ class ConfigReceiver : BroadcastReceiver() {
         const val DEFAULT_NOTES = false // sticky-note/fortune overlay is off unless the user opts in
 
         // Slideshow settings (written by PhotosActivity, read by SlideshowController).
-        const val KEY_DELAY_MS = "delay_ms"     // ms each photo is held
-        const val KEY_SHUFFLE = "shuffle"       // boolean: random order
-        const val KEY_FADE_MS = "fade_ms"       // ms auto crossfade duration
-        const val KEY_PAIRS = "pairs"           // boolean: pair two photos to fill the screen
-        const val KEY_KEN_BURNS = "ken_burns"   // boolean: cinematic pan/zoom
-        const val KEY_CLOCK = "clock"           // boolean: clock + weather overlay
+        const val KEY_ORIENTATION = "photo_orientation" // AUTO / LANDSCAPE / PORTRAIT / ALL
+        const val KEY_PLAYBACK_MODE = "album_playback_mode"
+        const val KEY_SELECTED_ALBUM = "selected_album"
+        const val KEY_DELAY_MS = "delay_ms" // ms each photo is held
+        const val KEY_SHUFFLE = "shuffle" // boolean: random order
+        const val KEY_FADE_MS = "fade_ms" // ms auto crossfade duration
+        const val KEY_PAIRS = "pairs" // boolean: pair two photos to fill the screen
+        const val KEY_KEN_BURNS = "ken_burns" // boolean: cinematic pan/zoom
+        const val KEY_CLOCK = "clock" // boolean: clock + weather overlay
         const val KEY_CLOCK_FACE = "clock_face" // which overlay clock style to draw (see CLOCK_FACES)
         const val DEFAULT_CLOCK_FACE = "classic"
         const val KEY_CLOCK_LOW_LIGHT = "clock_low_light" // boolean: clock-only in low light
-        const val KEY_NIGHT = "night"           // boolean: warm night dimming
+        const val KEY_NIGHT = "night" // boolean: warm night dimming
         const val KEY_ON_THIS_DAY = "on_this_day" // boolean: surface memories
-        const val KEY_CAPTIONS = "captions"     // boolean: photo date captions
-        const val KEY_FACE = "face_framing"     // boolean: face-aware Ken Burns target
+        const val KEY_CAPTIONS = "captions" // boolean: photo date captions
+        const val KEY_FACE = "face_framing" // boolean: face-aware Ken Burns target
         const val KEY_AMBIENT = "ambient_color" // boolean: per-photo color glow
-        const val KEY_ENHANCE = "auto_enhance"  // boolean: on-device auto-levels + vibrance
-        const val KEY_ZOOM_FILL = "zoom_fill"   // boolean: zoom-crop SINGLE photos to fill (vs whole
-                                                // photo over a blurred fill). Pairs always fill.
+        const val KEY_ENHANCE = "auto_enhance" // boolean: on-device auto-levels + vibrance
+        const val KEY_ZOOM_FILL = "zoom_fill" // boolean: zoom-crop SINGLE photos to fill (vs whole
+
+        // photo over a blurred fill). Pairs always fill.
         // Clock widget transform (set by long-press-drag/pinch on the screensaver). dx/dy are the
         // translation from the default bottom-left anchor as a fraction of screen W/H; scale is a
         // size multiplier. Floats.
@@ -159,28 +162,31 @@ class ConfigReceiver : BroadcastReceiver() {
 
         // ADB-settable boolean extras (extra name -> pref key) for quick testing, e.g.
         //   adb shell am broadcast -n com.portalhacks.frame/.ConfigReceiver --ez ken_burns false
-        private val BOOL_EXTRAS = arrayOf(
-            arrayOf("shuffle", KEY_SHUFFLE), arrayOf("pairs", KEY_PAIRS), arrayOf("ken_burns", KEY_KEN_BURNS),
-            arrayOf("clock", KEY_CLOCK), arrayOf("clock_low_light", KEY_CLOCK_LOW_LIGHT),
-            arrayOf("night", KEY_NIGHT), arrayOf("on_this_day", KEY_ON_THIS_DAY),
-            arrayOf("captions", KEY_CAPTIONS), arrayOf("face_framing", KEY_FACE), arrayOf("ambient_color", KEY_AMBIENT),
-            arrayOf("auto_enhance", KEY_ENHANCE), arrayOf("zoom_fill", KEY_ZOOM_FILL),
-            arrayOf("fortune", KEY_FORTUNE), arrayOf("sticky_notes", KEY_NOTES),
-        )
+        private val BOOL_EXTRAS =
+            arrayOf(
+                arrayOf("shuffle", KEY_SHUFFLE), arrayOf("pairs", KEY_PAIRS), arrayOf("ken_burns", KEY_KEN_BURNS),
+                arrayOf("clock", KEY_CLOCK), arrayOf("clock_low_light", KEY_CLOCK_LOW_LIGHT),
+                arrayOf("night", KEY_NIGHT), arrayOf("on_this_day", KEY_ON_THIS_DAY),
+                arrayOf("captions", KEY_CAPTIONS), arrayOf("face_framing", KEY_FACE),
+                arrayOf("ambient_color", KEY_AMBIENT),
+                arrayOf("auto_enhance", KEY_ENHANCE), arrayOf("zoom_fill", KEY_ZOOM_FILL),
+                arrayOf("fortune", KEY_FORTUNE), arrayOf("sticky_notes", KEY_NOTES),
+            )
 
         // Per-album photo caches are managed by AlbumCache (keyed by album URL).
 
         // Overlay clock styles (id -> display name), in cycle order. Rendered by
         // SlideshowController.applyClockFace; picked in Settings → Clock & night.
-        val CLOCK_FACES = listOf(
-            "classic" to "Classic",
-            "minimal" to "Minimal",
-            "big" to "Big",
-            "modern" to "Modern",
-            "flip" to "Flip clock",
-            "nixie" to "Nixie tube",
-            "analog" to "Analog",
-        )
+        val CLOCK_FACES =
+            listOf(
+                "classic" to "Classic",
+                "minimal" to "Minimal",
+                "big" to "Big",
+                "modern" to "Modern",
+                "flip" to "Flip clock",
+                "nixie" to "Nixie tube",
+                "analog" to "Analog",
+            )
 
         /** Display name for a clock-face id (falls back to Classic for anything unknown). */
         fun clockFaceName(id: String?): String =

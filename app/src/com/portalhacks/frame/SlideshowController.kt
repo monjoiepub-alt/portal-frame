@@ -65,7 +65,6 @@ class SlideshowController(
     root: FrameLayout,
     private val loader: ImageLoader,
 ) {
-
     private val back: ImageView
     private val front: ImageView
     private val status: TextView
@@ -103,6 +102,11 @@ class SlideshowController(
     private var shimmerHidden = false
 
     // User-tunable settings (read from prefs in the constructor; see PhotosActivity).
+    private val photoOrientation: String
+    private val strictFit: Boolean
+    private val orderedAlbums: Boolean
+    private var onCycle: (() -> Boolean)? = null
+    private var onItemFinished: ((String) -> Unit)? = null
     private val intervalMs: Long // time each slide is held
     private val autoFadeMs: Long // auto crossfade duration
     private val shuffle: Boolean // play photos in random order
@@ -117,7 +121,7 @@ class SlideshowController(
     private val ambientColor: Boolean // tint chrome to each photo's palette
     private val enhance: Boolean // on-device auto-levels + vibrance
     private val zoomFill: Boolean // single photos: crop to fill (vs whole photo + blurred fill).
-                                  // Pairs always fill their half regardless.
+    // Pairs always fill their half regardless.
 
     // Ken Burns animation state.
     private val rnd = Random()
@@ -151,6 +155,7 @@ class SlideshowController(
     private var noteDx = 0f
     private var noteDy = 0f
     private var draggingNote = false
+
     // Master switch for the whole sticky-note + fortune overlay (off unless the user opts in).
     // When false the note never shows and the fortune line is never fetched.
     private val notesEnabled: Boolean
@@ -164,21 +169,30 @@ class SlideshowController(
         screenPortrait = reqH > reqW
 
         val prefs = context.getSharedPreferences(ConfigReceiver.PREFS, Context.MODE_PRIVATE)
-        intervalMs = prefs.getLong(ConfigReceiver.KEY_DELAY_MS, ConfigReceiver.DEFAULT_DELAY_MS)
+        photoOrientation = prefs.getString(ConfigReceiver.KEY_ORIENTATION, "AUTO") ?: "AUTO"
+        strictFit = photoOrientation != "ALL"
+        orderedAlbums = prefs.getString(ConfigReceiver.KEY_PLAYBACK_MODE, "SHUFFLE_ALL") == "NEXT_ALBUM"
+        intervalMs =
+            prefs.getLong(ConfigReceiver.KEY_DELAY_MS, ConfigReceiver.DEFAULT_DELAY_MS)
+                .coerceIn(1000L, PlaybackPolicy.MAX_DURATION_MS)
         autoFadeMs = prefs.getLong(ConfigReceiver.KEY_FADE_MS, ConfigReceiver.DEFAULT_FADE_MS)
-        shuffle = prefs.getBoolean(ConfigReceiver.KEY_SHUFFLE, false)
-        pairs = prefs.getBoolean(ConfigReceiver.KEY_PAIRS, ConfigReceiver.DEFAULT_PAIRS)
-        kenBurns = prefs.getBoolean(ConfigReceiver.KEY_KEN_BURNS, ConfigReceiver.DEFAULT_KEN_BURNS)
+        shuffle = !orderedAlbums && (
+            prefs.getString(ConfigReceiver.KEY_PLAYBACK_MODE, "SHUFFLE_ALL") == "SHUFFLE_ALL" ||
+                prefs.getBoolean(ConfigReceiver.KEY_SHUFFLE, false)
+        )
+        pairs = !strictFit && !orderedAlbums && prefs.getBoolean(ConfigReceiver.KEY_PAIRS, ConfigReceiver.DEFAULT_PAIRS)
+        kenBurns = !strictFit && prefs.getBoolean(ConfigReceiver.KEY_KEN_BURNS, ConfigReceiver.DEFAULT_KEN_BURNS)
         showClock = prefs.getBoolean(ConfigReceiver.KEY_CLOCK, ConfigReceiver.DEFAULT_CLOCK)
         clockFaceId = prefs.getString(ConfigReceiver.KEY_CLOCK_FACE, ConfigReceiver.DEFAULT_CLOCK_FACE)
             ?: ConfigReceiver.DEFAULT_CLOCK_FACE
         nightMode = prefs.getBoolean(ConfigReceiver.KEY_NIGHT, ConfigReceiver.DEFAULT_NIGHT)
-        onThisDay = prefs.getBoolean(ConfigReceiver.KEY_ON_THIS_DAY, ConfigReceiver.DEFAULT_ON_THIS_DAY)
+        onThisDay = !orderedAlbums &&
+            prefs.getBoolean(ConfigReceiver.KEY_ON_THIS_DAY, ConfigReceiver.DEFAULT_ON_THIS_DAY)
         captions = prefs.getBoolean(ConfigReceiver.KEY_CAPTIONS, ConfigReceiver.DEFAULT_CAPTIONS)
         faceFraming = prefs.getBoolean(ConfigReceiver.KEY_FACE, ConfigReceiver.DEFAULT_FACE)
         ambientColor = prefs.getBoolean(ConfigReceiver.KEY_AMBIENT, ConfigReceiver.DEFAULT_AMBIENT)
         enhance = prefs.getBoolean(ConfigReceiver.KEY_ENHANCE, ConfigReceiver.DEFAULT_ENHANCE)
-        zoomFill = prefs.getBoolean(ConfigReceiver.KEY_ZOOM_FILL, ConfigReceiver.DEFAULT_ZOOM_FILL)
+        zoomFill = !strictFit && prefs.getBoolean(ConfigReceiver.KEY_ZOOM_FILL, ConfigReceiver.DEFAULT_ZOOM_FILL)
         clockDx = prefs.getFloat(ConfigReceiver.KEY_CLOCK_DX, ConfigReceiver.DEFAULT_CLOCK_DX)
         clockDy = prefs.getFloat(ConfigReceiver.KEY_CLOCK_DY, ConfigReceiver.DEFAULT_CLOCK_DY)
         clockScale = prefs.getFloat(ConfigReceiver.KEY_CLOCK_SCALE, ConfigReceiver.DEFAULT_CLOCK_SCALE)
@@ -202,24 +216,30 @@ class SlideshowController(
         // Gradient scrims so the white system-overlay pills (top) and our caption
         // text (bottom) stay legible over bright photos — per the Portal design rules.
         val topScrim = View(context)
-        topScrim.background = GradientDrawable(
-            GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(0x99000000.toInt(), 0x00000000),
-        )
-        val tsp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(context, 96f),
-        )
+        topScrim.background =
+            GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0x99000000.toInt(), 0x00000000),
+            )
+        val tsp =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                Ui.dp(context, 96f),
+            )
         tsp.gravity = Gravity.TOP
         topScrim.layoutParams = tsp
 
         val bottomScrim = View(context)
-        bottomScrim.background = GradientDrawable(
-            GradientDrawable.Orientation.BOTTOM_TOP,
-            intArrayOf(0xB3000000.toInt(), 0x00000000),
-        )
-        val bsp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(context, 150f),
-        )
+        bottomScrim.background =
+            GradientDrawable(
+                GradientDrawable.Orientation.BOTTOM_TOP,
+                intArrayOf(0xB3000000.toInt(), 0x00000000),
+            )
+        val bsp =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                Ui.dp(context, 150f),
+            )
         bsp.gravity = Gravity.BOTTOM
         bottomScrim.layoutParams = bsp
 
@@ -229,10 +249,11 @@ class SlideshowController(
         status.typeface = Ui.medium(context)
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
         status.setShadowLayer(6f, 0f, 1f, Color.BLACK)
-        val sp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-        )
+        val sp =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            )
         sp.gravity = Gravity.TOP or Gravity.START
         sp.leftMargin = margin
         sp.topMargin = Ui.dp(context, 24f)
@@ -244,10 +265,11 @@ class SlideshowController(
         info.typeface = Ui.medium(context)
         info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
         info.setShadowLayer(8f, 0f, 1f, Color.BLACK)
-        val ip = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-        )
+        val ip =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            )
         ip.gravity = Gravity.BOTTOM or Gravity.END
         ip.rightMargin = margin
         ip.bottomMargin = clockBottom // align with the clock's date line, not the screen edge
@@ -255,10 +277,11 @@ class SlideshowController(
 
         // Bottom-left: a large clock with a "day, date · weather" line beneath it
         // (Nest/Portal photo-frame style). Time uses a clean, AM/PM-free format.
-        timeFmt = SimpleDateFormat(
-            if (android.text.format.DateFormat.is24HourFormat(context)) "H:mm" else "h:mm",
-            Locale.getDefault(),
-        )
+        timeFmt =
+            SimpleDateFormat(
+                if (android.text.format.DateFormat.is24HourFormat(context)) "H:mm" else "h:mm",
+                Locale.getDefault(),
+            )
         clock = TextView(context)
         clock.setTextColor(Color.WHITE)
         clock.typeface = Ui.clockFace(context) // match the Portal native clock
@@ -281,10 +304,11 @@ class SlideshowController(
         clockFaceView = ClockFaceView(context)
         clockFaceView.visibility = View.GONE
         clockBox.addView(clockFaceView)
-        val cbp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-        )
+        val cbp =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            )
         cbp.gravity = Gravity.BOTTOM or Gravity.START
         cbp.leftMargin = margin
         cbp.bottomMargin = clockBottom // match the Portal home clock's height off the bottom
@@ -299,9 +323,11 @@ class SlideshowController(
         clockEditHint.gravity = Gravity.CENTER_HORIZONTAL
         clockEditHint.setShadowLayer(8f, 0f, 1f, Color.BLACK)
         clockEditHint.visibility = View.GONE
-        val cehp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-        )
+        val cehp =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            )
         cehp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
         cehp.topMargin = Ui.dp(context, 40f)
         clockEditHint.layoutParams = cehp
@@ -319,19 +345,26 @@ class SlideshowController(
         // Extra top padding leaves room for the tape; extra bottom-right for the folded corner.
         noteBox.setPadding(notePadH, Ui.dp(context, 26f), notePadH + Ui.dp(context, 6f), Ui.dp(context, 24f))
         noteBox.maxWidth = Ui.dp(context, 300f)
-        noteBox.background = StickyNoteBg(
-            top = 0xFFFFEFA8.toInt(), // lighter amber at the top edge
-            bottom = 0xFFFFD24A.toInt(), // deeper amber toward the bottom
-            fold = 0xFFE8B838.toInt(), // underside of the folded corner
-            tape = 0x33FFFFFF, // matte translucent tape
-            radiusPx = Ui.dp(context, 5f).toFloat(),
-            foldPx = Ui.dp(context, 26f).toFloat(),
-        )
+        noteBox.background =
+            StickyNoteBg(
+                // lighter amber at the top edge
+                top = 0xFFFFEFA8.toInt(),
+                // deeper amber toward the bottom
+                bottom = 0xFFFFD24A.toInt(),
+                // underside of the folded corner
+                fold = 0xFFE8B838.toInt(),
+                // matte translucent tape
+                tape = 0x33FFFFFF,
+                radiusPx = Ui.dp(context, 5f).toFloat(),
+                foldPx = Ui.dp(context, 26f).toFloat(),
+            )
         noteBox.elevation = Ui.dp(context, 12f).toFloat() // drop shadow
         noteBox.rotation = -3f // casual "stuck on" tilt
-        val np = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-        )
+        val np =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            )
         np.gravity = Gravity.TOP or Gravity.END
         np.topMargin = Ui.dp(context, 104f) // clear the Portal system pills + top scrim
         np.rightMargin = Ui.dp(context, 44f)
@@ -360,13 +393,16 @@ class SlideshowController(
         binBox.addView(
             binLabel,
             LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = Ui.dp(context, 2f) },
         )
         binBox.visibility = View.GONE
-        val binp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-        )
+        val binp =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            )
         binp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
         binp.bottomMargin = Ui.dp(context, 56f)
         binBox.layoutParams = binp
@@ -376,27 +412,30 @@ class SlideshowController(
         nightTint = View(context)
         nightTint.setBackgroundColor(0xFFFF8A2A.toInt())
         nightTint.alpha = 0f
-        nightTint.layoutParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT,
-        )
+        nightTint.layoutParams =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            )
 
         // Edge vignette tinted to each photo's mood color (Ambilight-for-photos).
         ambientGlow = View(context)
-        ambientGlow.layoutParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT,
-        )
+        ambientGlow.layoutParams =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            )
         if (!ambientColor) {
             ambientGlow.visibility = View.GONE
         }
 
         // Shimmer over the dark first frame so it never looks "stuck" while loading.
         shimmer = ShimmerView(context)
-        shimmer.layoutParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT,
-        )
+        shimmer.layoutParams =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            )
 
         // Centered, larger, weather-less clock for low-light "clock only" mode — a touch
         // dimmer than the overlay clock. Hidden until setClockOnly(true).
@@ -419,19 +458,24 @@ class SlideshowController(
         clockOnlyBox.addView(
             bigClock,
             LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
-        val bdlp = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-        )
+        val bdlp =
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
         bdlp.topMargin = Ui.dp(context, 4f)
         clockOnlyBox.addView(bigDate, bdlp)
         applyClockFace() // restyle the overlay clock per the chosen face (default: classic)
         // Full-width box so the centered clock never clips; vertically centred on screen.
-        val colp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-        )
+        val colp =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            )
         colp.gravity = Gravity.CENTER_VERTICAL
         clockOnlyBox.layoutParams = colp
         clockOnlyBox.visibility = View.GONE
@@ -440,9 +484,10 @@ class SlideshowController(
         // invariant is "clock-only clock visible => screen is dark".
         clockOnlyScrim = View(context)
         clockOnlyScrim.setBackgroundColor(Color.BLACK)
-        clockOnlyScrim.layoutParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
-        )
+        clockOnlyScrim.layoutParams =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+            )
         clockOnlyScrim.visibility = View.GONE
 
         if (!showClock) {
@@ -481,6 +526,23 @@ class SlideshowController(
         shimmer.startSweep()
     }
 
+    fun setOnItemFinished(callback: (String) -> Unit) {
+        onItemFinished = callback
+    }
+
+    fun setOnCycle(callback: () -> Boolean) {
+        onCycle = callback
+    }
+
+    /** Empty strict selections must clear the previous photo, never fall back to samples. */
+    fun showEmpty(message: String) {
+        stop()
+        blank()
+        items.clear()
+        status.text = message
+        startClock()
+    }
+
     fun setOnDismiss(onDismiss: Runnable?) {
         this.onDismiss = onDismiss
     }
@@ -510,11 +572,12 @@ class SlideshowController(
             return
         }
         val manual = noteText.trim()
-        val text = when {
-            manual.isNotEmpty() -> manual
-            fortuneEnabled -> fortuneLine?.trim().orEmpty()
-            else -> ""
-        }
+        val text =
+            when {
+                manual.isNotEmpty() -> manual
+                fortuneEnabled -> fortuneLine?.trim().orEmpty()
+                else -> ""
+            }
         if (text.isEmpty() || clockOnly) {
             noteBox.visibility = View.GONE
         } else {
@@ -528,7 +591,10 @@ class SlideshowController(
     // ------------------------------------------------ sticky-note drag / dismiss
 
     /** True if (x,y) in root coords falls on the note (padded a little for an easy grab). */
-    private fun isOnNote(x: Float, y: Float): Boolean {
+    private fun isOnNote(
+        x: Float,
+        y: Float,
+    ): Boolean {
         if (noteBox.visibility != View.VISIBLE || noteBox.width == 0) return false
         val pad = Ui.dp(context, 10f)
         val l = noteBox.left + noteBox.translationX - pad
@@ -539,7 +605,10 @@ class SlideshowController(
     }
 
     /** Move the note by a touch delta, clamped so its centre stays on screen. */
-    private fun dragNoteBy(dx: Float, dy: Float) {
+    private fun dragNoteBy(
+        dx: Float,
+        dy: Float,
+    ) {
         val baseCx = noteBox.left + noteBox.width / 2f
         val baseCy = noteBox.top + noteBox.height / 2f
         val edge = Ui.dp(context, 8f).toFloat()
@@ -650,9 +719,17 @@ class SlideshowController(
         var typeface = Ui.clockFace(context)
         var showDate = true
         when (clockFaceId) {
-            "minimal" -> { timeSp = 54f; showDate = false } // just the time, quietly
-            "big" -> { timeSp = 132f } // a statement clock
-            "modern" -> { timeSp = 84f; typeface = Ui.bold(context) } // Inter Bold, editorial
+            "minimal" -> {
+                timeSp = 54f
+                showDate = false
+            } // just the time, quietly
+            "big" -> {
+                timeSp = 132f
+            } // a statement clock
+            "modern" -> {
+                timeSp = 84f
+                typeface = Ui.bold(context)
+            } // Inter Bold, editorial
             else -> {} // "classic": the Portal-native clock font, date + weather
         }
         clock.setTextSize(TypedValue.COMPLEX_UNIT_SP, timeSp)
@@ -690,7 +767,10 @@ class SlideshowController(
     }
 
     /** True if (x,y) in root coords falls on the clock (its scaled bounds, padded for easy grab). */
-    private fun isOnClock(x: Float, y: Float): Boolean {
+    private fun isOnClock(
+        x: Float,
+        y: Float,
+    ): Boolean {
         if (clockBox.width == 0) return false
         val pad = Ui.dp(context, 24f)
         val cx = clockBox.left + clockBox.translationX + clockBox.width / 2f
@@ -702,9 +782,10 @@ class SlideshowController(
 
     private fun enterClockEdit() {
         editingClock = true
-        clockBox.background = Ui.roundRect(0x33000000, Ui.dp(context, 14f)).apply {
-            setStroke(Ui.dp(context, 2f), Ui.BLUE)
-        }
+        clockBox.background =
+            Ui.roundRect(0x33000000, Ui.dp(context, 14f)).apply {
+                setStroke(Ui.dp(context, 2f), Ui.BLUE)
+            }
         clockEditHint.visibility = View.VISIBLE
     }
 
@@ -716,7 +797,10 @@ class SlideshowController(
     }
 
     /** Move the clock by a touch delta, clamped so its centre stays on screen. */
-    private fun dragClockBy(dx: Float, dy: Float) {
+    private fun dragClockBy(
+        dx: Float,
+        dy: Float,
+    ) {
         val baseCx = clockBox.left + clockBox.width / 2f
         val baseCy = clockBox.top + clockBox.height / 2f
         val edge = Ui.dp(context, 8f).toFloat()
@@ -739,11 +823,12 @@ class SlideshowController(
 
     private fun newImageView(): ImageView {
         val iv = ImageView(context)
-        iv.layoutParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT,
-        )
-        iv.scaleType = ImageView.ScaleType.CENTER_CROP
+        iv.layoutParams =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            )
+        iv.scaleType = if (strictFit) ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
         return iv
     }
 
@@ -947,6 +1032,7 @@ class SlideshowController(
     }
 
     fun stop() {
+        animGen++ // invalidate in-flight loads and animation completion callbacks
         running = false
         handler.removeCallbacks(autoTick)
         handler.removeCallbacks(clockTick)
@@ -1058,6 +1144,8 @@ class SlideshowController(
             promoteOnThisDay(items)
         }
         remote = true
+        running = true
+        index = 0
         if (clockOnly) {
             return // keep showing the clock; the new photos display when light returns
         }
@@ -1084,7 +1172,11 @@ class SlideshowController(
      * instead of waiting for the rotation to reach it. Falls back to the first item if
      * [showId] isn't present.
      */
-    fun setItemsShowing(newItems: List<Slide>?, showId: String, instant: Boolean = false) {
+    fun setItemsShowing(
+        newItems: List<Slide>?,
+        showId: String,
+        instant: Boolean = false,
+    ) {
         if (newItems.isNullOrEmpty()) {
             return
         }
@@ -1127,7 +1219,9 @@ class SlideshowController(
 
     fun showNext() {
         if (items.isNotEmpty()) {
-            transitionTo(nextStart(index, curIsPair), SWIPE_FADE_MS)
+            val next = nextStart(index, curIsPair)
+            if (next <= index && onCycle?.invoke() == true) return
+            transitionTo(next, SWIPE_FADE_MS)
         }
     }
 
@@ -1139,70 +1233,78 @@ class SlideshowController(
 
     private fun scheduleAuto() {
         handler.removeCallbacks(autoTick)
-        if (running && items.size > 1) {
+        if (running && (items.size > 1 || onCycle != null)) {
             handler.postDelayed(autoTick, intervalMs)
         }
     }
 
-    private val autoTick = Runnable {
-        if (running && items.isNotEmpty()) {
-            val step = if (curIsPair) 2 else 1
-            val next: Int
-            if (index + step >= items.size) {
-                // Wrapped a full loop: reshuffle so the next loop differs and
-                // doesn't open with a photo we just showed.
-                if (shuffle && items.size > 2) {
-                    smartShuffle(items)
+    private val autoTick =
+        Runnable {
+            if (running && items.isNotEmpty()) {
+                val step = if (curIsPair) 2 else 1
+                val next: Int
+                if (index + step >= items.size) {
+                    if (onCycle?.invoke() == true) return@Runnable
+                    // Wrapped a full loop: reshuffle so the next loop differs and
+                    // doesn't open with a photo we just showed.
+                    if (shuffle && items.size > 2) {
+                        smartShuffle(items)
+                    }
+                    next = 0
+                } else {
+                    next = index + step
                 }
-                next = 0
-            } else {
-                next = index + step
+                transitionTo(next, autoFadeMs)
             }
-            transitionTo(next, autoFadeMs)
         }
-    }
 
     /** Show item i directly (no crossfade) — used for the first frame. */
     private fun showImmediate(i: Int) {
         val gen = ++animGen
         val j = pairWith(i)
         val isPair = j >= 0
-        val cb = ImageLoader.Callback { b ->
-            if (gen != animGen) {
-                return@Callback
-            }
-            if (b != null) {
-                back.setImageBitmap(b)
-                front.setImageDrawable(null)
-                front.alpha = 0f
-                index = i
-                curIsPair = isPair
-                status.text = ""
-                info.text = captionOf(i)
-                noteShown(i)
-                if (isPair) {
-                    noteShown(j)
+        val cb =
+            ImageLoader.Callback { b ->
+                if (gen != animGen) {
+                    return@Callback
                 }
-                hideShimmer()
-                kbPath = newKenBurnsPath(b)
-                applyKenBurnsStart(back, kbPath)
-                startKenBurnsOnBack(gen)
-                updateAmbient(b)
-                enhanceFilter = if (enhance) makeEnhance(b) else null
-                back.colorFilter = enhanceFilter
+                if (b != null) {
+                    back.setImageBitmap(b)
+                    front.setImageDrawable(null)
+                    front.alpha = 0f
+                    index = i
+                    curIsPair = isPair
+                    status.text = ""
+                    info.text = captionOf(i)
+                    noteShown(i)
+                    if (isPair) {
+                        noteShown(j)
+                    }
+                    hideShimmer()
+                    kbPath = newKenBurnsPath(b)
+                    applyKenBurnsStart(back, kbPath)
+                    startKenBurnsOnBack(gen)
+                    updateAmbient(b)
+                    enhanceFilter = if (enhance) makeEnhance(b) else null
+                    back.colorFilter = enhanceFilter
+                }
+                // Failed loads are skipped for album traversal rather than blocking it forever.
+                onItemFinished?.invoke(items[i].id)
+                prefetchNext(nextStart(i, isPair))
+                scheduleAuto()
             }
-            prefetchNext(nextStart(i, isPair))
-            scheduleAuto()
-        }
         if (isPair) {
             loader.loadPair(items[i].id, items[j].id, reqW, reqH, screenPortrait, cb)
         } else {
-            loader.load(items[i].id, reqW, reqH, zoomFill, cb)
+            loader.load(items[i].id, reqW, reqH, zoomFill, cb, strictFit, photoOrientation)
         }
     }
 
     /** Crossfade to start item [next]; loads async, safe to call mid-fade. */
-    private fun transitionTo(next: Int, fadeMs: Long) {
+    private fun transitionTo(
+        next: Int,
+        fadeMs: Long,
+    ) {
         if (items.isEmpty()) {
             return
         }
@@ -1210,54 +1312,57 @@ class SlideshowController(
         val gen = ++animGen
         val j = pairWith(next)
         val isPair = j >= 0
-        val cb = ImageLoader.Callback { bmp ->
-            if (gen != animGen) {
-                return@Callback // superseded by a newer request
-            }
-            if (bmp == null) {
+        val cb =
+            ImageLoader.Callback { bmp ->
+                if (gen != animGen) {
+                    return@Callback // superseded by a newer request
+                }
+                if (bmp == null) {
+                    onItemFinished?.invoke(items[next].id)
+                    index = next
+                    curIsPair = isPair
+                    scheduleAuto()
+                    return@Callback
+                }
+                front.animate().cancel()
+                front.setImageBitmap(bmp)
+                front.alpha = 0f
                 index = next
                 curIsPair = isPair
-                scheduleAuto()
-                return@Callback
-            }
-            front.animate().cancel()
-            front.setImageBitmap(bmp)
-            front.alpha = 0f
-            index = next
-            curIsPair = isPair
-            status.text = ""
-            info.text = captionOf(next)
-            noteShown(next)
-            if (isPair) {
-                noteShown(j)
-            }
-            hideShimmer()
-            // Incoming image shows the path's START transform during the fade; when it
-            // settles onto `back` we hand off at the same transform and animate to the end.
-            kbPath = newKenBurnsPath(bmp)
-            applyKenBurnsStart(front, kbPath)
-            enhanceFilter = if (enhance) makeEnhance(bmp) else null
-            front.colorFilter = enhanceFilter
-            front.animate().alpha(1f).setDuration(fadeMs).withEndAction {
-                if (gen != animGen) {
-                    return@withEndAction
+                status.text = ""
+                info.text = captionOf(next)
+                noteShown(next)
+                if (isPair) {
+                    noteShown(j)
                 }
-                back.setImageBitmap(bmp)
-                applyKenBurnsStart(back, kbPath)
-                back.colorFilter = enhanceFilter
-                front.alpha = 0f
-                applyKenBurnsStart(front, null) // reset incoming view for reuse
-                front.colorFilter = null
-                startKenBurnsOnBack(gen)
-                updateAmbient(bmp)
-                prefetchNext(nextStart(next, isPair))
-                scheduleAuto()
+                hideShimmer()
+                // Incoming image shows the path's START transform during the fade; when it
+                // settles onto `back` we hand off at the same transform and animate to the end.
+                kbPath = newKenBurnsPath(bmp)
+                applyKenBurnsStart(front, kbPath)
+                enhanceFilter = if (enhance) makeEnhance(bmp) else null
+                front.colorFilter = enhanceFilter
+                front.animate().alpha(1f).setDuration(fadeMs).withEndAction {
+                    if (gen != animGen) {
+                        return@withEndAction
+                    }
+                    back.setImageBitmap(bmp)
+                    applyKenBurnsStart(back, kbPath)
+                    back.colorFilter = enhanceFilter
+                    front.alpha = 0f
+                    applyKenBurnsStart(front, null) // reset incoming view for reuse
+                    front.colorFilter = null
+                    onItemFinished?.invoke(items[next].id)
+                    startKenBurnsOnBack(gen)
+                    updateAmbient(bmp)
+                    prefetchNext(nextStart(next, isPair))
+                    scheduleAuto()
+                }
             }
-        }
         if (isPair) {
             loader.loadPair(items[next].id, items[j].id, reqW, reqH, screenPortrait, cb)
         } else {
-            loader.load(items[next].id, reqW, reqH, zoomFill, cb)
+            loader.load(items[next].id, reqW, reqH, zoomFill, cb, strictFit, photoOrientation)
         }
     }
 
@@ -1282,14 +1387,17 @@ class SlideshowController(
     }
 
     /** The start index after this one, stepping over a pair, wrapping to 0. */
-    private fun nextStart(start: Int, isPair: Boolean): Int {
+    private fun nextStart(
+        start: Int,
+        isPair: Boolean,
+    ): Int {
         val n = start + if (isPair) 2 else 1
         return if (n >= items.size) 0 else n
     }
 
     private fun prefetchNext(startIndex: Int) {
         if (items.size > 1 && startIndex >= 0 && startIndex < items.size) {
-            loader.prefetch(items[startIndex].id, reqW, reqH, zoomFill)
+            loader.prefetch(items[startIndex].id, reqW, reqH, zoomFill, strictFit, photoOrientation)
         }
     }
 
@@ -1326,7 +1434,10 @@ class SlideshowController(
     // ---------------------------------------------------------------- Ken Burns
 
     /** Put a view at the start of the current path (or reset to identity if off). */
-    private fun applyKenBurnsStart(v: View, p: KenBurns?) {
+    private fun applyKenBurnsStart(
+        v: View,
+        p: KenBurns?,
+    ) {
         if (p == null) {
             v.scaleX = 1f
             v.scaleY = 1f
@@ -1385,8 +1496,10 @@ class SlideshowController(
         val ty0: Float,
         val ty1: Float,
     ) {
-
-        fun applyAt(v: View, f: Float) {
+        fun applyAt(
+            v: View,
+            f: Float,
+        ) {
             val s = s0 + (s1 - s0) * f
             v.scaleX = s
             v.scaleY = s
@@ -1403,7 +1516,12 @@ class SlideshowController(
             /**
              * @param focus optional {fx, fy} in [0,1] image space to drift toward; null = random.
              */
-            fun random(w: Int, h: Int, r: Random, focus: FloatArray?): KenBurns {
+            fun random(
+                w: Int,
+                h: Int,
+                r: Random,
+                focus: FloatArray?,
+            ): KenBurns {
                 // Start at exact fill (scale 1.0, centred) and zoom IN to a gentle target. Pan
                 // starts at zero (1.0 has no cover slack) and grows linearly with the scale toward
                 // the end scale's slack — edge-safe at every point along the path.
@@ -1423,8 +1541,18 @@ class SlideshowController(
                 return KenBurns(1f, s1, 0f, tx1, 0f, ty1)
             }
 
-            private fun clamp(v: Float, lo: Float, hi: Float): Float =
-                if (v < lo) lo else if (v > hi) hi else v
+            private fun clamp(
+                v: Float,
+                lo: Float,
+                hi: Float,
+            ): Float =
+                if (v < lo) {
+                    lo
+                } else if (v > hi) {
+                    hi
+                } else {
+                    v
+                }
         }
     }
 
@@ -1539,12 +1667,13 @@ class SlideshowController(
             if (yearsAgo < 1) {
                 continue // taken today this year, not a memory
             }
-            val badge = if (yearsAgo == 1) {
-                "1 year ago today ✨"
-            } else {
-                "$yearsAgo years ago today ✨"
-            }
-            memories.add(Slide(s.id, badge, s.timeMs, s.portrait))
+            val badge =
+                if (yearsAgo == 1) {
+                    "1 year ago today ✨"
+                } else {
+                    "$yearsAgo years ago today ✨"
+                }
+            memories.add(Slide(s.id, badge, s.timeMs, s.portrait, s.width, s.height))
             it.remove()
         }
         if (memories.isEmpty()) {
@@ -1559,21 +1688,23 @@ class SlideshowController(
 
     // ---------------------------------------------------------------- clock + date
 
-    private val clockTick = object : Runnable {
-        override fun run() {
-            updateClock()
-            handler.postDelayed(this, 60000 - System.currentTimeMillis() % 60000)
+    private val clockTick =
+        object : Runnable {
+            override fun run() {
+                updateClock()
+                handler.postDelayed(this, 60000 - System.currentTimeMillis() % 60000)
+            }
         }
-    }
 
     // Sweeps the analog second hand. Only posted while the analog face is showing, so the other
     // faces (and the text clocks) still tick once a minute.
-    private val secondsTick = object : Runnable {
-        override fun run() {
-            if (showClock && clockFaceId == "analog") clockFaceView.invalidate()
-            handler.postDelayed(this, 1000L)
+    private val secondsTick =
+        object : Runnable {
+            override fun run() {
+                if (showClock && clockFaceId == "analog") clockFaceView.invalidate()
+                handler.postDelayed(this, 1000L)
+            }
         }
-    }
 
     private fun startClock() {
         handler.removeCallbacks(clockTick)
@@ -1585,11 +1716,12 @@ class SlideshowController(
 
     private fun updateClock() {
         val c = Calendar.getInstance()
-        nightTint.alpha = if (nightMode) {
-            warmthForHour(c.get(Calendar.HOUR_OF_DAY) + c.get(Calendar.MINUTE) / 60f)
-        } else {
-            0f
-        }
+        nightTint.alpha =
+            if (nightMode) {
+                warmthForHour(c.get(Calendar.HOUR_OF_DAY) + c.get(Calendar.MINUTE) / 60f)
+            } else {
+                0f
+            }
         val time = timeFmt.format(c.time)
         val date = dateFmt.format(c.time)
         // Centered low-light clock (no weather) — kept current even when the overlay is off.
@@ -1616,7 +1748,9 @@ class SlideshowController(
             sb.append(" ")
             sb.setSpan(
                 ImageSpan(moonDrawable, ImageSpan.ALIGN_CENTER),
-                s, s + 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+                s,
+                s + 1,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
             )
             sb.append("  ").append(w.temp.toString()).append("°")
             dateLine.text = sb
@@ -1641,12 +1775,13 @@ class SlideshowController(
 
     // ---------------------------------------------------------------- weather
 
-    private val weatherTick = object : Runnable {
-        override fun run() {
-            refreshWeather()
-            handler.postDelayed(this, WEATHER_INTERVAL_MS)
+    private val weatherTick =
+        object : Runnable {
+            override fun run() {
+                refreshWeather()
+                handler.postDelayed(this, WEATHER_INTERVAL_MS)
+            }
         }
-    }
 
     private fun startWeather() {
         handler.removeCallbacks(weatherTick)
@@ -1664,12 +1799,13 @@ class SlideshowController(
         }
     }
 
-    private val fortuneTick = object : Runnable {
-        override fun run() {
-            refreshFortune()
-            handler.postDelayed(this, FORTUNE_INTERVAL_MS)
+    private val fortuneTick =
+        object : Runnable {
+            override fun run() {
+                refreshFortune()
+                handler.postDelayed(this, FORTUNE_INTERVAL_MS)
+            }
         }
-    }
 
     /** Begin (or re-arm) the periodic fortune refresh — only when fortune mode is active. */
     private fun startFortune() {
@@ -1744,11 +1880,12 @@ class SlideshowController(
             }
             val band = w * 0.35f
             val cx = pos * w
-            paint.shader = LinearGradient(
-                cx - band, 0f, cx + band, 0f,
-                intArrayOf(0x00FFFFFF, 0x14FFFFFF, 0x00FFFFFF),
-                floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP,
-            )
+            paint.shader =
+                LinearGradient(
+                    cx - band, 0f, cx + band, 0f,
+                    intArrayOf(0x00FFFFFF, 0x14FFFFFF, 0x00FFFFFF),
+                    floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP,
+                )
             canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), paint)
         }
     }
@@ -1775,9 +1912,10 @@ class SlideshowController(
         private val flap = Path()
 
         override fun onBoundsChange(b: Rect) {
-            paperPaint.shader = LinearGradient(
-                0f, b.top.toFloat(), 0f, b.bottom.toFloat(), top, bottom, Shader.TileMode.CLAMP,
-            )
+            paperPaint.shader =
+                LinearGradient(
+                    0f, b.top.toFloat(), 0f, b.bottom.toFloat(), top, bottom, Shader.TileMode.CLAMP,
+                )
             val l = b.left.toFloat()
             val t = b.top.toFloat()
             val r = b.right.toFloat()
@@ -1818,8 +1956,13 @@ class SlideshowController(
             canvas.save()
             canvas.rotate(-7f, cx, cy)
             canvas.drawRoundRect(
-                cx - tapeW / 2f, cy - tapeH / 2f, cx + tapeW / 2f, cy + tapeH / 2f,
-                radiusPx * 0.6f, radiusPx * 0.6f, tapePaint,
+                cx - tapeW / 2f,
+                cy - tapeH / 2f,
+                cx + tapeW / 2f,
+                cy + tapeH / 2f,
+                radiusPx * 0.6f,
+                radiusPx * 0.6f,
+                tapePaint,
             )
             canvas.restore()
         }
@@ -1830,7 +1973,9 @@ class SlideshowController(
         }
 
         override fun setAlpha(alpha: Int) {}
+
         override fun setColorFilter(colorFilter: ColorFilter?) {}
+
         @Deprecated("required override", ReplaceWith("PixelFormat.TRANSLUCENT"))
         override fun getOpacity() = PixelFormat.TRANSLUCENT
     }
@@ -1864,6 +2009,7 @@ class SlideshowController(
     companion object {
         private const val TAG = "PortalFrame"
         private const val SLIDES_DIR = "slides"
+
         // Cap the Ken Burns animation length so long "time per photo" values (up to a day) don't
         // run a multi-hour ValueAnimator; past this the motion holds at its end frame.
         private const val KEN_BURNS_MAX_MS = 30_000L

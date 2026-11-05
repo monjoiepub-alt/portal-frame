@@ -1,4 +1,5 @@
 [versions]
+junit = "4.13.2"
 agp = "8.13.2"
 kotlin = "2.4.0"
 composeBom = "2026.05.01"
@@ -8,6 +9,7 @@ detekt = "1.23.8"
 ktlint = "12.1.2"
 
 [libraries]
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 compose-ui = { group = "androidx.compose.ui", name = "ui" }
 compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }

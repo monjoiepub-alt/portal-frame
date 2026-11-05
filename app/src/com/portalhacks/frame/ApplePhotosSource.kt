@@ -26,7 +26,6 @@ import java.util.TimeZone
  * Google provider so callers fall back to the bundled samples.
  */
 internal object ApplePhotosSource : PhotoProvider {
-
     private const val TAG = "PortalFrame"
     private const val MAX_JSON_BYTES = 16 * 1024 * 1024
     private const val GUID_BATCH = 25 // bound each webasseturls request
@@ -46,13 +45,14 @@ internal object ApplePhotosSource : PhotoProvider {
         for (attempt in 0 until 3) {
             val (code, body, mmeHost) = post(base + "webstream", "{\"streamCtag\":null}")
             if (code == 330) {
-                val host = mmeHost.ifEmpty {
-                    try {
-                        JSONObject(body).optString("X-Apple-MMe-Host", "")
-                    } catch (e: Exception) {
-                        ""
+                val host =
+                    mmeHost.ifEmpty {
+                        try {
+                            JSONObject(body).optString("X-Apple-MMe-Host", "")
+                        } catch (e: Exception) {
+                            ""
+                        }
                     }
-                }
                 if (host.isEmpty()) throw IOException("iCloud redirect missing host")
                 base = "https://$host/$token/sharedstreams/"
                 continue
@@ -113,14 +113,18 @@ internal object ApplePhotosSource : PhotoProvider {
         val slides = ArrayList<Slide>()
         for (it in items) {
             val u = urlByChecksum[it.checksum] ?: continue
-            slides.add(Slide(u, null, it.timeMs, it.height > it.width))
+            slides.add(Slide(u, null, it.timeMs, it.height > it.width, it.width, it.height))
         }
         if (videos > 0) Log.i(TAG, "skipped $videos video(s)")
         Log.i(TAG, "iCloud album: ${slides.size} photos, title='$title'")
         return Album(title, slides)
     }
 
-    private fun resolveUrls(base: String, guids: List<String>, out: MutableMap<String, String>) {
+    private fun resolveUrls(
+        base: String,
+        guids: List<String>,
+        out: MutableMap<String, String>,
+    ) {
         val body = JSONObject().put("photoGuids", JSONArray(guids)).toString()
         val (code, resp, _) = post(base + "webasseturls", body)
         if (code != 200) throw IOException("iCloud webasseturls http $code")
@@ -168,7 +172,10 @@ internal object ApplePhotosSource : PhotoProvider {
     }
 
     /** POST [body] as JSON; returns (status, responseBody, X-Apple-MMe-Host header or ""). */
-    private fun post(urlStr: String, body: String): Triple<Int, String, String> {
+    private fun post(
+        urlStr: String,
+        body: String,
+    ): Triple<Int, String, String> {
         if (!urlStr.startsWith("https://")) throw IOException("refusing non-HTTPS iCloud URL")
         var c: HttpURLConnection? = null
         try {

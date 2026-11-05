@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.core.content.ContextCompat
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -32,12 +31,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -57,14 +58,15 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.io.File
-import kotlin.math.roundToInt
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * The Photos setup/settings screen, in Jetpack Compose. Reads/writes the shared
@@ -72,7 +74,6 @@ import kotlinx.coroutines.withContext
  * scanner / manual link entry.
  */
 class SettingsActivity : ComponentActivity() {
-
     private val prefs: SharedPreferences
         get() = getSharedPreferences(ConfigReceiver.PREFS, Context.MODE_PRIVATE)
 
@@ -88,11 +89,15 @@ class SettingsActivity : ComponentActivity() {
     // "Photos added from phones" list refreshes immediately (DropServerService broadcasts).
     private val uploadTick = mutableIntStateOf(0)
     private var uploadReceiverRegistered = false
-    private val uploadReceiver = object : BroadcastReceiver() {
-        override fun onReceive(c: Context?, i: Intent?) {
-            uploadTick.intValue++
+    private val uploadReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                c: Context?,
+                i: Intent?,
+            ) {
+                uploadTick.intValue++
+            }
         }
-    }
 
     override fun onResume() {
         super.onResume()
@@ -101,7 +106,9 @@ class SettingsActivity : ComponentActivity() {
         ScreensaverGuardService.startIfEnabled(this)
         if (!uploadReceiverRegistered) {
             ContextCompat.registerReceiver(
-                this, uploadReceiver, IntentFilter(DropServerService.ACTION_UPLOAD),
+                this,
+                uploadReceiver,
+                IntentFilter(DropServerService.ACTION_UPLOAD),
                 ContextCompat.RECEIVER_NOT_EXPORTED,
             )
             uploadReceiverRegistered = true
@@ -127,12 +134,13 @@ class SettingsActivity : ComponentActivity() {
         DropServerService.start(this)
         setContent {
             MaterialTheme(
-                colorScheme = darkColorScheme(
-                    primary = PortalColors.Blue,
-                    onPrimary = PortalColors.OnPrimary,
-                    background = PortalColors.Bg,
-                    surface = PortalColors.Surface,
-                ),
+                colorScheme =
+                    darkColorScheme(
+                        primary = PortalColors.Blue,
+                        onPrimary = PortalColors.OnPrimary,
+                        background = PortalColors.Bg,
+                        surface = PortalColors.Surface,
+                    ),
                 typography = rememberInterTypography(this),
             ) {
                 SettingsScreen()
@@ -165,13 +173,14 @@ class SettingsActivity : ComponentActivity() {
         startActivity(Intent(this, PhotosActivity::class.java).putExtra("goto", goto))
     }
 
-    private fun isOurScreensaver(): Boolean = try {
-        val enabled = Settings.Secure.getInt(contentResolver, "screensaver_enabled", 0) == 1
-        val comp = Settings.Secure.getString(contentResolver, "screensaver_components")
-        enabled && comp != null && comp.contains(packageName)
-    } catch (_: Exception) {
-        false
-    }
+    private fun isOurScreensaver(): Boolean =
+        try {
+            val enabled = Settings.Secure.getInt(contentResolver, "screensaver_enabled", 0) == 1
+            val comp = Settings.Secure.getString(contentResolver, "screensaver_components")
+            enabled && comp != null && comp.contains(packageName)
+        } catch (_: Exception) {
+            false
+        }
 
     // ----------------------------------------------------------------- UI
 
@@ -188,6 +197,14 @@ class SettingsActivity : ComponentActivity() {
 
         // Card groups, so the layout can be one or two columns by available width.
         val sourceCards: @Composable () -> Unit = {
+            Card("Playback & album selection") {
+                PlaybackControls { tick++ }
+                PrimaryBtn("Start slideshow") {
+                    startActivity(
+                        Intent(this, SlideshowComposeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    )
+                }
+            }
             Card("Screensaver") {
                 val active = isOurScreensaver()
                 val protectedMode = Screensaver.canWrite(ctx)
@@ -202,8 +219,14 @@ class SettingsActivity : ComponentActivity() {
                     },
                 )
                 Spacer(Modifier.height(12.dp))
-                if (active) PrimaryBtn("Change screensaver") { openScreensaver() }
-                else PrimaryBtn("Use as screensaver") { enableScreensaver(); tick++ }
+                if (active) {
+                    PrimaryBtn("Change screensaver") { openScreensaver() }
+                } else {
+                    PrimaryBtn("Use as screensaver") {
+                        enableScreensaver()
+                        tick++
+                    }
+                }
                 if (Screensaver.immortalInstalled(ctx)) {
                     Spacer(Modifier.height(12.dp))
                     Text(
@@ -211,7 +234,8 @@ class SettingsActivity : ComponentActivity() {
                             "Immortal → Settings → Screensaver, turn Immortal's screensaver OFF so " +
                             "Frame can take the slot. (Frame still needs its one-time ADB " +
                             "screensaver permission — see the setup guide.)",
-                        color = PortalColors.TextBody, fontSize = 15.sp,
+                        color = PortalColors.TextBody,
+                        fontSize = 15.sp,
                     )
                 }
             }
@@ -220,7 +244,10 @@ class SettingsActivity : ComponentActivity() {
                     // One removable row per album; the slideshow plays them all merged.
                     albums.forEachIndexed { i, url ->
                         if (i > 0) Divider()
-                        AlbumRow(url) { Albums.remove(prefs, url); tick++ }
+                        AlbumRow(url) {
+                            Albums.remove(prefs, url)
+                            tick++
+                        }
                     }
                     Spacer(Modifier.height(14.dp))
                 } else {
@@ -243,16 +270,19 @@ class SettingsActivity : ComponentActivity() {
                     .padding(horizontal = 24.dp, vertical = 6.dp),
             ) {
                 CollapsibleRow(
-                    "Playback", "Time, order, transitions, captions",
-                    openGroup == "Playback", { openGroup = if (openGroup == "Playback") null else "Playback" },
+                    "Playback",
+                    "Time, order, transitions, captions",
+                    openGroup == "Playback",
+                    { openGroup = if (openGroup == "Playback") null else "Playback" },
                 ) {
-                    DurationSliderRow { tick++ }
+                    DurationEditor { tick++ }
                     Divider()
                     ToggleRow("Shuffle photos", ConfigReceiver.KEY_SHUFFLE, false) { tick++ }
                     Divider()
                     CycleRow("Transition", fadeLabel(getLong(ConfigReceiver.KEY_FADE_MS, 1200))) {
                         val next = cycle(FADE_CHOICES, getLong(ConfigReceiver.KEY_FADE_MS, 1200), 1)
-                        setLong(ConfigReceiver.KEY_FADE_MS, next); tick++
+                        setLong(ConfigReceiver.KEY_FADE_MS, next)
+                        tick++
                     }
                     Divider()
                     ToggleRow("Pair photos to fill the screen", ConfigReceiver.KEY_PAIRS, false) { tick++ }
@@ -261,16 +291,19 @@ class SettingsActivity : ComponentActivity() {
                         "Zoom single photos to fill",
                         ConfigReceiver.KEY_ZOOM_FILL,
                         false,
-                        subtitle = "Crop a single photo to fill the screen. Off: show the whole photo " +
-                            "over a blurred fill. Paired photos always fill.",
+                        subtitle =
+                            "Crop a single photo to fill the screen. Off: show the whole photo " +
+                                "over a blurred fill. Paired photos always fill.",
                     ) { tick++ }
                     Divider()
                     ToggleRow("Photo captions", ConfigReceiver.KEY_CAPTIONS, true) { tick++ }
                 }
                 Divider()
                 CollapsibleRow(
-                    "Look & motion", "Motion, color, enhance, framing",
-                    openGroup == "Look & motion", { openGroup = if (openGroup == "Look & motion") null else "Look & motion" },
+                    "Look & motion",
+                    "Motion, color, enhance, framing",
+                    openGroup == "Look & motion",
+                    { openGroup = if (openGroup == "Look & motion") null else "Look & motion" },
                 ) {
                     ToggleRow("Cinematic motion", ConfigReceiver.KEY_KEN_BURNS, true) { tick++ }
                     Divider()
@@ -282,11 +315,15 @@ class SettingsActivity : ComponentActivity() {
                 }
                 Divider()
                 CollapsibleRow(
-                    "Clock & night", "Clock, low light, night warmth",
-                    openGroup == "Clock & night", { openGroup = if (openGroup == "Clock & night") null else "Clock & night" },
+                    "Clock & night",
+                    "Clock, low light, night warmth",
+                    openGroup == "Clock & night",
+                    { openGroup = if (openGroup == "Clock & night") null else "Clock & night" },
                 ) {
                     ToggleRow(
-                        "Clock & weather", ConfigReceiver.KEY_CLOCK, true,
+                        "Clock & weather",
+                        ConfigReceiver.KEY_CLOCK,
+                        true,
                         subtitle = "Long-press the clock on the screensaver to move or resize it.",
                     ) { tick++ }
                     Divider()
@@ -312,19 +349,27 @@ class SettingsActivity : ComponentActivity() {
                         tick++
                     }
                     Divider()
-                    ToggleRow("Only clock in low light", ConfigReceiver.KEY_CLOCK_LOW_LIGHT, ConfigReceiver.DEFAULT_CLOCK_LOW_LIGHT) { tick++ }
+                    ToggleRow(
+                        "Only clock in low light",
+                        ConfigReceiver.KEY_CLOCK_LOW_LIGHT,
+                        ConfigReceiver.DEFAULT_CLOCK_LOW_LIGHT,
+                    ) { tick++ }
                     Divider()
                     ToggleRow("Night warmth", ConfigReceiver.KEY_NIGHT, true) { tick++ }
                 }
                 Divider()
                 CollapsibleRow(
-                    "Extras", "Memories, sticky notes",
-                    openGroup == "Extras", { openGroup = if (openGroup == "Extras") null else "Extras" },
+                    "Extras",
+                    "Memories, sticky notes",
+                    openGroup == "Extras",
+                    { openGroup = if (openGroup == "Extras") null else "Extras" },
                 ) {
                     ToggleRow("On This Day memories", ConfigReceiver.KEY_ON_THIS_DAY, true) { tick++ }
                     Divider()
                     ToggleRow(
-                        "Sticky notes & fortunes", ConfigReceiver.KEY_NOTES, ConfigReceiver.DEFAULT_NOTES,
+                        "Sticky notes & fortunes",
+                        ConfigReceiver.KEY_NOTES,
+                        ConfigReceiver.DEFAULT_NOTES,
                         subtitle = "Show a post-it note on the frame, or a fetched wisdom line when no note is set.",
                     ) { tick++ }
                 }
@@ -348,7 +393,9 @@ class SettingsActivity : ComponentActivity() {
             ) {
                 Text(
                     if (hasAlbum) "Your photos" else "Show your photos",
-                    color = PortalColors.Text, fontSize = 30.sp, fontWeight = FontWeight.Bold,
+                    color = PortalColors.Text,
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.Bold,
                 )
 
                 if (twoCol) {
@@ -378,15 +425,21 @@ class SettingsActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Card(title: String, content: @Composable () -> Unit) {
+    private fun Card(
+        title: String,
+        content: @Composable () -> Unit,
+    ) {
         Column(
             Modifier.fillMaxWidth().padding(top = 16.dp)
                 .clip(RoundedCornerShape(20.dp)).background(PortalColors.Surface)
                 .padding(horizontal = 24.dp, vertical = 20.dp),
         ) {
             Text(
-                title.uppercase(), color = PortalColors.TextMuted, fontSize = 13.sp,
-                fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp,
+                title.uppercase(),
+                color = PortalColors.TextMuted,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.6.sp,
             )
             Spacer(Modifier.height(8.dp))
             content()
@@ -397,7 +450,10 @@ class SettingsActivity : ComponentActivity() {
     @Composable
     private fun ColumnHeader(text: String) {
         Text(
-            text, color = PortalColors.Text, fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
+            text,
+            color = PortalColors.Text,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(top = 20.dp, bottom = 2.dp),
         )
     }
@@ -527,7 +583,11 @@ class SettingsActivity : ComponentActivity() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Switch(
                         checked = on,
-                        onCheckedChange = { on = it; Albums.setEnabled(prefs, url, it) },
+                        onCheckedChange = {
+                            on = it
+                            Albums.setEnabled(prefs, url, it)
+                            resumeTick.intValue++
+                        },
                         colors = SwitchDefaults.colors(checkedTrackColor = PortalColors.Blue),
                     )
                     Spacer(Modifier.width(10.dp))
@@ -550,8 +610,7 @@ class SettingsActivity : ComponentActivity() {
     }
 
     /** "Google Photos" / "iCloud" / "Link" for the album's URL. */
-    private fun providerLabel(url: String): String =
-        PhotoSources.providerFor(url)?.displayName ?: "Link"
+    private fun providerLabel(url: String): String = PhotoSources.providerFor(url)?.displayName ?: "Link"
 
     /**
      * "Add photos from your phone": the QR + URL anyone on the Wi-Fi scans to push photos
@@ -603,16 +662,20 @@ class SettingsActivity : ComponentActivity() {
                 var showLink by remember { mutableStateOf(false) }
                 Text(
                     if (showLink) "Hide link" else "Can't scan? Show link",
-                    color = PortalColors.Blue, fontSize = 16.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { showLink = !showLink }
-                        .padding(horizontal = 12.dp, vertical = 14.dp),
+                    color = PortalColors.Blue,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier =
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { showLink = !showLink }
+                            .padding(horizontal = 12.dp, vertical = 14.dp),
                 )
                 if (showLink) {
                     Text(
                         url ?: "",
-                        color = PortalColors.TextMuted, fontSize = 14.sp,
+                        color = PortalColors.TextMuted,
+                        fontSize = 14.sp,
                         modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp),
                     )
                 }
@@ -673,16 +736,19 @@ class SettingsActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Body(text: String) =
-        Text(text, color = PortalColors.TextBody, fontSize = 17.sp)
+    private fun Body(text: String) = Text(text, color = PortalColors.TextBody, fontSize = 17.sp)
 
     @Composable
-    private fun Divider() = Box(
-        Modifier.fillMaxWidth().height(1.dp).padding(vertical = 0.dp).background(PortalColors.Hairline),
-    )
+    private fun Divider() =
+        Box(
+            Modifier.fillMaxWidth().height(1.dp).padding(vertical = 0.dp).background(PortalColors.Hairline),
+        )
 
     @Composable
-    private fun PrimaryBtn(label: String, onClick: () -> Unit) = Button(
+    private fun PrimaryBtn(
+        label: String,
+        onClick: () -> Unit,
+    ) = Button(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().height(64.dp),
         colors = ButtonDefaults.buttonColors(containerColor = PortalColors.Blue),
@@ -720,7 +786,11 @@ class SettingsActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun CycleRow(label: String, value: String, onClick: () -> Unit) {
+    private fun CycleRow(
+        label: String,
+        value: String,
+        onClick: () -> Unit,
+    ) {
         Row(
             Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -730,73 +800,159 @@ class SettingsActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * "Time per photo": a slider that snaps across [DELAY_PRESETS] (4 sec … 1 day). The slider value
-     * is the preset INDEX (a plain linear ms slider can't span that range). The label updates live
-     * while dragging; the pref is committed on release so we don't thrash prefs every tick.
-     */
     @Composable
-    private fun DurationSliderRow(onChanged: () -> Unit) {
-        var idx by remember {
-            mutableIntStateOf(nearestPresetIndex(getLong(ConfigReceiver.KEY_DELAY_MS, ConfigReceiver.DEFAULT_DELAY_MS)))
+    private fun PlaybackControls(onChanged: () -> Unit) {
+        val mode =
+            PlaybackPolicy.Mode.entries.firstOrNull {
+                it.name == prefs.getString(ConfigReceiver.KEY_PLAYBACK_MODE, "SHUFFLE_ALL")
+            } ?: PlaybackPolicy.Mode.SHUFFLE_ALL
+        CycleRow(
+            "Playback mode",
+            when (mode) {
+                PlaybackPolicy.Mode.REPEAT_CURRENT -> "Repeat current album"
+                PlaybackPolicy.Mode.NEXT_ALBUM -> "Next album"
+                PlaybackPolicy.Mode.SHUFFLE_ALL -> "Shuffle all"
+            },
+        ) {
+            val next = PlaybackPolicy.Mode.entries[(mode.ordinal + 1) % PlaybackPolicy.Mode.entries.size]
+            prefs.edit().putString(ConfigReceiver.KEY_PLAYBACK_MODE, next.name).apply()
+            onChanged()
         }
-        Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Time per photo", color = PortalColors.Text, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                Text(
-                    fmtDelay(DELAY_PRESETS[idx]),
-                    color = PortalColors.Blue, fontSize = 18.sp, fontWeight = FontWeight.Medium,
+        val selection = prefs.getString(ConfigReceiver.KEY_ORIENTATION, "AUTO") ?: "AUTO"
+        val orientations = listOf("AUTO", "LANDSCAPE", "PORTRAIT", "ALL")
+        CycleRow(
+            "Photo orientation",
+            when (selection) {
+                "LANDSCAPE" -> "Manual · Landscape"
+                "PORTRAIT" -> "Manual · Portrait"
+                "ALL" -> "All orientations"
+                else -> "Auto · follows tablet"
+            },
+        ) {
+            val next = orientations[(orientations.indexOf(selection).coerceAtLeast(0) + 1) % orientations.size]
+            prefs.edit().putString(ConfigReceiver.KEY_ORIENTATION, next).apply()
+            onChanged()
+        }
+        Body(
+            "Auto and Manual show whole matching photos without zoom, cropping or pairing. " +
+                "Square and unknown-size photos are excluded.",
+        )
+        AlbumSelector(onChanged)
+    }
+
+    @Composable
+    private fun AlbumSelector(onChanged: () -> Unit) {
+        val albums = Albums.enabled(prefs).toMutableList()
+        if (LocalUploads.count(this) > 0) albums.add(PlaybackPolicy.LOCAL_ALBUM)
+        val selected =
+            prefs.getString(ConfigReceiver.KEY_SELECTED_ALBUM, null)?.takeIf { it in albums }
+                ?: albums.firstOrNull()
+        var expanded by remember { mutableStateOf(false) }
+        Box {
+            Button(onClick = { expanded = true }, enabled = albums.isNotEmpty()) {
+                Text("Selected: " + albumLabel(selected))
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                albums.forEach { url ->
+                    DropdownMenuItem(text = { Text(albumLabel(url)) }, onClick = {
+                        prefs.edit().putString(ConfigReceiver.KEY_SELECTED_ALBUM, url).apply()
+                        expanded = false
+                        onChanged()
+                    })
+                }
+            }
+        }
+        Body(
+            "Selection is used by Repeat and Next album. " +
+                "Shuffle all mixes all enabled albums, including photos from phones.",
+        )
+    }
+
+    private fun albumLabel(url: String?): String =
+        when (url) {
+            null -> "No enabled albums"
+            PlaybackPolicy.LOCAL_ALBUM -> "Photos from phones"
+            else -> AlbumCache.title(prefs, url)?.takeIf { it.isNotBlank() } ?: url
+        }
+
+    @Composable
+    private fun DurationEditor(onChanged: () -> Unit) {
+        val saved =
+            getLong(ConfigReceiver.KEY_DELAY_MS, ConfigReceiver.DEFAULT_DELAY_MS)
+                .coerceIn(1000L, PlaybackPolicy.MAX_DURATION_MS)
+        var hours by remember { mutableStateOf((saved / 3_600_000).toString()) }
+        var minutes by remember { mutableStateOf((saved / 60_000 % 60).toString()) }
+        var seconds by remember { mutableStateOf((saved / 1000 % 60).toString()) }
+        val parsed = PlaybackPolicy.duration(hours, minutes, seconds)
+        Text("Time per photo · 1 second to 24 hours", color = PortalColors.Text)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val fields = listOf("Hours" to hours, "Minutes" to minutes, "Seconds" to seconds)
+            fields.forEachIndexed { index, (label, value) ->
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { text ->
+                        when (index) {
+                            0 -> hours = text
+                            1 -> minutes = text
+                            else -> seconds = text
+                        }
+                    },
+                    label = { Text(label) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
                 )
             }
-            Slider(
-                value = idx.toFloat(),
-                onValueChange = { idx = it.roundToInt() },
-                valueRange = 0f..(DELAY_PRESETS.size - 1).toFloat(),
-                steps = DELAY_PRESETS.size - 2,
-                onValueChangeFinished = {
-                    setLong(ConfigReceiver.KEY_DELAY_MS, DELAY_PRESETS[idx]); onChanged()
-                },
-                colors = SliderDefaults.colors(
-                    thumbColor = PortalColors.Blue,
-                    activeTrackColor = PortalColors.Blue,
-                    inactiveTrackColor = PortalColors.Text.copy(alpha = 0.18f),
-                    // Hide the per-step tick dots — 13 of them clutter the track.
-                    activeTickColor = Color.Transparent,
-                    inactiveTickColor = Color.Transparent,
-                ),
-            )
-            // Muted range endpoints so the span (seconds → a day) is legible at a glance.
-            Row(Modifier.fillMaxWidth()) {
-                Text(
-                    fmtDelay(DELAY_PRESETS.first()),
-                    color = PortalColors.TextMuted, fontSize = 14.sp, modifier = Modifier.weight(1f),
-                )
-                Text(fmtDelay(DELAY_PRESETS.last()), color = PortalColors.TextMuted, fontSize = 14.sp)
+        }
+        if (parsed == null) {
+            Text("Enter 1 second–24 hours; minutes and seconds must be 0–59.", color = PortalColors.Red)
+        }
+        Button(enabled = parsed != null, onClick = {
+            parsed?.let {
+                setLong(ConfigReceiver.KEY_DELAY_MS, it)
+                onChanged()
+            }
+        }) { Text("Save duration") }
+        Body("Saved: " + durationLabel(saved))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(listOf(10_000L, 30_000L, 60_000L, 180_000L, 300_000L)) { value ->
+                Button(onClick = {
+                    hours = "0"
+                    minutes = (value / 60_000).toString()
+                    seconds = (value / 1000 % 60).toString()
+                    setLong(ConfigReceiver.KEY_DELAY_MS, value)
+                    onChanged()
+                }) { Text(durationLabel(value)) }
             }
         }
     }
 
+    private fun durationLabel(ms: Long): String = "${ms / 3_600_000}h ${ms / 60_000 % 60}m ${ms / 1000 % 60}s"
+
     // ----------------------------------------------------------------- prefs/helpers
 
-    private fun getLong(key: String, def: Long) = prefs.getLong(key, def)
-    private fun setLong(key: String, v: Long) = prefs.edit().putLong(key, v).apply()
+    private fun getLong(
+        key: String,
+        def: Long,
+    ) = prefs.getLong(key, def)
+
+    private fun setLong(
+        key: String,
+        v: Long,
+    ) = prefs.edit().putLong(key, v).apply()
 
     companion object {
         private const val PREVIEW_W = 720 // 16:9 thumbnail decode size for the album preview
         private const val PREVIEW_H = 405
 
-        // "Time per photo" presets the slider snaps across (4 sec … 1 day, ms). Keeps the old
-        // values (4s/6s/10s/30s/60s) so previously-saved delays still land on a stop.
-        private val DELAY_PRESETS = longArrayOf(
-            4_000, 6_000, 10_000, 30_000, // seconds
-            60_000, 300_000, 600_000, 1_800_000, // 1m, 5m, 10m, 30m
-            3_600_000, 10_800_000, 21_600_000, 43_200_000, // 1h, 3h, 6h, 12h
-            86_400_000, // 1 day
-        )
         private val FADE_CHOICES = longArrayOf(2000, 1200, 500)
         private val FADE_LABELS = arrayOf("Slow", "Normal", "Fast")
 
-        private fun cycle(choices: LongArray, cur: Long, fallback: Int): Long {
+        private fun cycle(
+            choices: LongArray,
+            cur: Long,
+            fallback: Int,
+        ): Long {
             for (i in choices.indices) if (choices[i] == cur) return choices[(i + 1) % choices.size]
             return choices[fallback]
         }
@@ -805,23 +961,5 @@ class SettingsActivity : ComponentActivity() {
             for (i in FADE_CHOICES.indices) if (FADE_CHOICES[i] == ms) return FADE_LABELS[i]
             return "Normal"
         }
-
-        /** Index of the preset closest to [ms] (so a legacy/odd saved value still maps to a stop). */
-        private fun nearestPresetIndex(ms: Long): Int {
-            var best = 0
-            for (i in DELAY_PRESETS.indices) {
-                if (Math.abs(DELAY_PRESETS[i] - ms) < Math.abs(DELAY_PRESETS[best] - ms)) best = i
-            }
-            return best
-        }
-
-        private fun fmtDelay(ms: Long): String = when {
-            ms >= 86_400_000 -> plural(ms / 86_400_000, "day")
-            ms >= 3_600_000 -> plural(ms / 3_600_000, "hour")
-            ms >= 60_000 -> "${ms / 60_000} min"
-            else -> "${ms / 1000} sec"
-        }
-
-        private fun plural(n: Long, unit: String): String = "$n $unit" + if (n == 1L) "" else "s"
     }
 }

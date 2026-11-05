@@ -19,7 +19,6 @@ import java.util.regex.Pattern
  * back to bundled images when this returns empty.
  */
 internal object GooglePhotosSource : PhotoProvider {
-
     override val displayName = "Google Photos"
 
     override fun matches(url: String): Boolean =
@@ -30,19 +29,22 @@ internal object GooglePhotosSource : PhotoProvider {
     private const val IMG_WIDTH = 1280
 
     // Start of each media item: ["<AF1Qip mediaKey>",["https://lh3...
-    private val ITEM: Pattern = Pattern.compile(
-        "\\[\"AF1Qip[A-Za-z0-9_\\-]+\",\\[\"https://lh3\\.googleusercontent\\.com/",
-    )
+    private val ITEM: Pattern =
+        Pattern.compile(
+            "\\[\"AF1Qip[A-Za-z0-9_\\-]+\",\\[\"https://lh3\\.googleusercontent\\.com/",
+        )
 
     // First thumbnail (base url, width, height) within an item.
-    private val THUMB: Pattern = Pattern.compile(
-        "\"(https://lh3\\.googleusercontent\\.com/[^\"]+?)\",(\\d{2,5}),(\\d{2,5})",
-    )
+    private val THUMB: Pattern =
+        Pattern.compile(
+            "\"(https://lh3\\.googleusercontent\\.com/[^\"]+?)\",(\\d{2,5}),(\\d{2,5})",
+        )
 
     // Capture time (ms) , "mediaId" , tzOffset(ms)
-    private val DATE: Pattern = Pattern.compile(
-        ",(\\d{13}),\"[A-Za-z0-9_\\-]+\",(-?\\d{5,9}),",
-    )
+    private val DATE: Pattern =
+        Pattern.compile(
+            ",(\\d{13}),\"[A-Za-z0-9_\\-]+\",(-?\\d{5,9}),",
+        )
 
     // The only reliable POSITIVE video signal: a transcoded download URL on this
     // host. The earlier heuristics (absence of EXIF/filesize, "video-only"
@@ -50,17 +52,20 @@ internal object GooglePhotosSource : PhotoProvider {
     // album as "videos" — see isVideo().
     private const val VIDEO_MARKER = "video-downloads.googleusercontent.com"
 
-    private val SHARE_URL: Pattern = Pattern.compile(
-        "(https://photos\\.google\\.com/share/[A-Za-z0-9_\\-]+\\?key=[A-Za-z0-9_\\-]+)",
-    )
+    private val SHARE_URL: Pattern =
+        Pattern.compile(
+            "(https://photos\\.google\\.com/share/[A-Za-z0-9_\\-]+\\?key=[A-Za-z0-9_\\-]+)",
+        )
 
     // Album name from the share page's Open Graph title (content/property order varies).
-    private val OG_TITLE_A: Pattern = Pattern.compile(
-        "<meta[^>]+property=\"og:title\"[^>]+content=\"([^\"]*)\"",
-    )
-    private val OG_TITLE_B: Pattern = Pattern.compile(
-        "<meta[^>]+content=\"([^\"]*)\"[^>]+property=\"og:title\"",
-    )
+    private val OG_TITLE_A: Pattern =
+        Pattern.compile(
+            "<meta[^>]+property=\"og:title\"[^>]+content=\"([^\"]*)\"",
+        )
+    private val OG_TITLE_B: Pattern =
+        Pattern.compile(
+            "<meta[^>]+content=\"([^\"]*)\"[^>]+property=\"og:title\"",
+        )
 
     @Throws(Exception::class)
     override fun fetch(shareUrl: String): Album {
@@ -88,8 +93,9 @@ internal object GooglePhotosSource : PhotoProvider {
                 return ""
             }
         }
-        val t = m.group(1)!!
-            .replace("&amp;", "&").replace("&#39;", "'").replace("&quot;", "\"").trim()
+        val t =
+            m.group(1)!!
+                .replace("&amp;", "&").replace("&#39;", "'").replace("&quot;", "\"").trim()
         // The generic site title isn't an album name.
         return if (t.equals("Google Photos", ignoreCase = true)) "" else t
     }
@@ -136,7 +142,7 @@ internal object GooglePhotosSource : PhotoProvider {
             val tms = captureMillis(item)
             // Caption is derived at display time (album · relative time); keep only
             // the raw capture instant and the portrait flag here.
-            out.add(Slide(base + "=w" + IMG_WIDTH, null, tms, h > w))
+            out.add(Slide(base + "=w" + IMG_WIDTH, null, tms, h > w, w, h))
         }
         if (videos > 0) {
             Log.i(TAG, "skipped $videos video(s)")
@@ -191,20 +197,20 @@ internal object GooglePhotosSource : PhotoProvider {
             c.setRequestProperty("Accept-Language", "en-US,en;q=0.9")
             val code = c.responseCode
             Log.i(TAG, "album http $code -> ${c.url}")
-            val `in` = BufferedInputStream(c.inputStream)
+            val input = BufferedInputStream(c.inputStream)
             val bos = ByteArrayOutputStream()
             val buf = ByteArray(8192)
             var n: Int
             var total = 0
-            while (`in`.read(buf).also { n = it } != -1) {
+            while (input.read(buf).also { n = it } != -1) {
                 total += n
                 if (total > MAX_HTML_BYTES) {
-                    `in`.close()
+                    input.close()
                     throw IOException("album page exceeds $MAX_HTML_BYTES bytes")
                 }
                 bos.write(buf, 0, n)
             }
-            `in`.close()
+            input.close()
             return bos.toString("UTF-8")
         } finally {
             c?.disconnect()

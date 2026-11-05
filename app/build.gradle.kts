@@ -12,12 +12,16 @@ plugins {
 // Release signing inputs, read from env vars (CI) or a local, git-ignored
 // keystore.properties (local release builds). Nothing secret is committed.
 // See RELEASING.md.
-val keystoreProps = Properties().apply {
-    val f = rootProject.file("keystore.properties")
-    if (f.exists()) FileInputStream(f).use { load(it) }
-}
-fun releaseSecret(env: String, prop: String): String? =
-    System.getenv(env) ?: keystoreProps.getProperty(prop)
+val keystoreProps =
+    Properties().apply {
+        val f = rootProject.file("keystore.properties")
+        if (f.exists()) FileInputStream(f).use { load(it) }
+    }
+
+fun releaseSecret(
+    env: String,
+    prop: String,
+): String? = System.getenv(env) ?: keystoreProps.getProperty(prop)
 
 android {
     namespace = "com.portalhacks.frame"
@@ -48,6 +52,8 @@ android {
         res.setSrcDirs(listOf("res"))
         assets.setSrcDirs(listOf("assets"))
     }
+
+    sourceSets["test"].java.setSrcDirs(listOf("tests"))
 
     signingConfigs {
         create("release") {
@@ -109,6 +115,7 @@ detekt {
 }
 
 dependencies {
+    testImplementation(libs.junit)
     implementation(files("libs/zxing-core-3.5.3.jar"))
 
     implementation(platform(libs.compose.bom))

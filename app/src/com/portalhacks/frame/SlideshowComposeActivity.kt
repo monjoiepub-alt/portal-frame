@@ -13,15 +13,23 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 /**
  * The live slideshow screensaver, hosted in Jetpack Compose.
@@ -37,278 +45,288 @@ import androidx.core.content.ContextCompat
  *
  * This is the screensaver target ([FrameDreamService] launches it).
  */
+@Suppress("TooManyFunctions")
 class SlideshowComposeActivity : ComponentActivity() {
-
     private lateinit var loader: ImageLoader
     private lateinit var controller: SlideshowController
+    private lateinit var root: FrameLayout
     private val handler = Handler(Looper.getMainLooper())
-
-    private var currentAlbums: List<String> = emptyList()
-    private var currentIds: List<String> = ArrayList()
-
-    // "AirDrop for Portal": photos arrive via the always-on DropServerService, which
-    // broadcasts ACTION_UPLOAD when one lands so we can show it immediately.
+    private var active = false
+    private var currentAlbum: String? = null
+    private var signature = ""
+    private val progress = AlbumProgress()
+    private var eligible: Map<String, List<Slide>> = emptyMap()
+    private val dimensions = mutableMapOf<String, Slide>()
+    private val probing = mutableSetOf<String>()
+    private val fetching = mutableSetOf<String>()
     private var uploadReceiverRegistered = false
-    private val uploadReceiver = object : BroadcastReceiver() {
-        override fun onReceive(c: Context?, i: Intent?) {
-            onLocalUploadChanged()
-        }
-    }
-
+    private val prefs get() = getSharedPreferences(ConfigReceiver.PREFS, MODE_PRIVATE)
+    private val mode get() =
+        PlaybackPolicy.Mode.entries.firstOrNull {
+            it.name == prefs.getString(ConfigReceiver.KEY_PLAYBACK_MODE, "SHUFFLE_ALL")
+        } ?: PlaybackPolicy.Mode.SHUFFLE_ALL
+    private val orientation get() =
+        PlaybackPolicy.Orientation.entries.firstOrNull {
+            it.name == prefs.getString(ConfigReceiver.KEY_ORIENTATION, "AUTO")
+        } ?: PlaybackPolicy.Orientation.AUTO
     private val sensorManager by lazy { getSystemService(SENSOR_SERVICE) as SensorManager }
-    private val lightSensor: Sensor? by lazy { sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT) }
+    private val lightSensor by lazy { sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT) }
+    private val lightListener =
+        object : SensorEventListener {
+            override fun onSensorChanged(e: SensorEvent) {
+                val lux = e.values.firstOrNull() ?: return
+                when {
+                    lux <= LOW_LUX -> controller.setClockOnly(true)
+                    lux >= HIGH_LUX -> controller.setClockOnly(false)
+                }
+            }
 
-    // Low-light "clock only" mode (mirrors the Portal night-mode option). When enabled and the
-    // room is dark, drop to a clock-only screen; restore the photos when the light returns.
-    private val lightListener = object : SensorEventListener {
-        override fun onSensorChanged(e: SensorEvent) {
-            val lux = e.values.firstOrNull() ?: return
-            when {
-                lux <= LOW_LUX -> controller.setClockOnly(true)
-                lux >= HIGH_LUX -> controller.setClockOnly(false)
+            override fun onAccuracyChanged(
+                s: Sensor?,
+                accuracy: Int,
+            ) {}
+        }
+    private val uploadReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                c: Context?,
+                i: Intent?,
+            ) {
+                rebuild()
             }
         }
-        override fun onAccuracyChanged(s: Sensor?, accuracy: Int) {}
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-                or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
-                or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-                or WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD,
-        )
-        // Honor the Portal's own brightness: don't override the window brightness, so the
-        // system's adaptive/manual brightness (and its light sensor) governs the frame.
-        window.attributes = window.attributes.apply {
-            screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-        }
-
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        setShowWhenLocked(true)
+        setTurnScreenOn(true)
         loader = ImageLoader(this)
-        // Run the LAN photo-drop server as an always-on foreground service so phones can
-        // push photos anytime, not just while this slideshow is on screen.
-        DropServerService.start(this)
-        // Build the slideshow's View hierarchy, then host it inside Compose.
-        val root = FrameLayout(this)
-        controller = SlideshowController(this, root, loader).apply {
-            setOnDismiss {
-                // Tap dismisses the screensaver. The dream launched us in our own task
-                // (FLAG_ACTIVITY_NEW_TASK) on top of whatever app the user had open, so
-                // just tearing this task down hands control back to that app — matching
-                // the stock Portal screensaver. (We used to force CATEGORY_HOME here,
-                // which always bounced the user to the launcher instead; see issue #3.)
-                finishAndRemoveTask()
-            }
-            // Portal's launcher won't show sideloaded app icons, so long-press the
-            // slideshow to reach the setup/settings screen.
-            setOnSettings {
-                startActivity(Intent(this@SlideshowComposeActivity, SettingsActivity::class.java))
-            }
+        loader.onDimensions = { slide ->
+            val old = dimensions.put(slide.id, slide)
+            if (active && (old?.width != slide.width || old.height != slide.height)) rebuild()
         }
+        root = FrameLayout(this)
         setContent {
-            AndroidView(factory = { root }, modifier = Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize()) {
+                AndroidView(factory = { root }, modifier = Modifier.fillMaxSize())
+                Button(
+                    onClick = { openSettings() },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                ) { Text("Albums & playback") }
+            }
         }
+    }
+
+    private fun openSettings() {
+        startActivity(Intent(this, SettingsActivity::class.java))
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_FULLSCREEN
-                    or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                )
-        }
-    }
-
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(newConfig)
-        // The manifest declares configChanges for orientation, so the Activity (and the hosted
-        // SlideshowController) survive a rotation. Tell the controller to recompute its screen
-        // dimensions / pairing axis so side-by-side ↔ top/bottom follows the new orientation.
-        if (::controller.isInitialized) {
-            controller.onScreenConfigChanged()
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            WindowCompat.getInsetsController(window, window.decorView).apply {
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(WindowInsetsCompat.Type.systemBars())
+            }
         }
     }
 
     override fun onResume() {
         super.onResume()
-        // Clear any photo retained from a previous run so re-entering the frame
-        // doesn't flash the old image before the first new frame loads.
-        controller.blank()
-        // Re-apply the clock position/size (picks up a Settings "reset" done while away).
-        controller.applyClockTransform()
-        val prefs = getSharedPreferences(ConfigReceiver.PREFS, MODE_PRIVATE)
-        // Pick up a sticky note set over ADB / Settings while we were away.
-        controller.setNote(prefs.getString(ConfigReceiver.KEY_NOTE, "") ?: "")
-
-        // "Only show clock in low light": watch the ambient light sensor when enabled.
-        sensorManager.unregisterListener(lightListener)
-        val low = lightSensor
-        if (prefs.getBoolean(ConfigReceiver.KEY_CLOCK_LOW_LIGHT, ConfigReceiver.DEFAULT_CLOCK_LOW_LIGHT) &&
-            low != null
-        ) {
-            sensorManager.registerListener(lightListener, low, SensorManager.SENSOR_DELAY_NORMAL)
-        } else {
-            controller.setClockOnly(false)
-        }
-
-        currentAlbums = Albums.enabled(prefs)
-        DropServerService.start(this)
-        if (!uploadReceiverRegistered) {
-            ContextCompat.registerReceiver(
-                this, uploadReceiver, IntentFilter(DropServerService.ACTION_UPLOAD),
-                ContextCompat.RECEIVER_NOT_EXPORTED,
-            )
-            uploadReceiverRegistered = true
-        }
-
-        // Photos pushed onto the frame over the LAN always play, alongside any albums.
-        val local = LocalUploads.slides(this)
-        val cached = currentAlbums.flatMap { AlbumCache.read(prefs, it) ?: emptyList() }
-        val initial = cached + local
-
-        if (currentAlbums.isEmpty() && local.isEmpty()) {
-            // Nothing configured and nothing pushed: show the bundled samples.
-            controller.start()
-            return
-        }
-
-        // Start straight from the caches + pushed photos if we have any (disk-cached images
-        // make the first photo appear near-instantly); otherwise a black "Loading…" screen —
-        // never the samples. When there are phone-pushed photos, open on the newest one so a
-        // freshly-added photo greets you on resume instead of being buried mid-rotation.
-        if (initial.isNotEmpty()) {
-            currentIds = idsOf(initial)
-            val newestLocal = local.firstOrNull()?.id
-            if (newestLocal != null) {
-                controller.setItemsShowing(initial, newestLocal, instant = true)
-            } else {
-                controller.setItems(initial)
+        active = true
+        // Rebuild the view controller to apply ALL saved preferences, not only clock transforms.
+        if (::controller.isInitialized) controller.stop()
+        root.removeAllViews()
+        controller =
+            SlideshowController(this, root, loader).apply {
+                setOnDismiss { finishAndRemoveTask() }
+                setOnSettings { openSettings() }
+                setOnCycle { advanceAlbum() }
+                setOnItemFinished { progress.complete(it) }
             }
-        } else {
-            currentIds = ArrayList()
-            controller.setStatusHint("Loading photos…")
+        currentAlbum = prefs.getString(ConfigReceiver.KEY_SELECTED_ALBUM, null)
+        signature = ""
+        progress.reset()
+        rebuild()
+        DropServerService.start(this)
+        ContextCompat.registerReceiver(
+            this,
+            uploadReceiver,
+            IntentFilter(DropServerService.ACTION_UPLOAD),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        uploadReceiverRegistered = true
+        if (prefs.getBoolean(ConfigReceiver.KEY_CLOCK_LOW_LIGHT, ConfigReceiver.DEFAULT_CLOCK_LOW_LIGHT)) {
+            lightSensor?.let { sensorManager.registerListener(lightListener, it, SensorManager.SENSOR_DELAY_NORMAL) }
         }
-
-        // Refresh now, then keep checking periodically while we're on screen.
-        fetchAllAndApply(initial.isEmpty())
-        handler.removeCallbacks(refreshTick)
+        fetchAlbums()
         handler.postDelayed(refreshTick, REFRESH_INTERVAL_MS)
     }
 
     override fun onPause() {
-        super.onPause()
-        sensorManager.unregisterListener(lightListener)
+        active = false
         handler.removeCallbacks(refreshTick)
-        // Leave DropServerService running so photos can still arrive while we're away.
+        sensorManager.unregisterListener(lightListener)
         if (uploadReceiverRegistered) {
             unregisterReceiver(uploadReceiver)
             uploadReceiverRegistered = false
         }
         controller.stop()
+        super.onPause()
     }
 
-    /**
-     * A phone just pushed photo(s) over the LAN — fold them into the slideshow and jump
-     * straight to the newest one (the in-room "tada"), instead of waiting for the rotation.
-     */
-    private fun onLocalUploadChanged() {
-        if (!::controller.isInitialized) return
-        val prefs = getSharedPreferences(ConfigReceiver.PREFS, MODE_PRIVATE)
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        loader.onDimensions = null
+        loader.shutdown()
+        super.onDestroy()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (active) {
+            controller.stop()
+            controller.blank()
+            controller.onScreenConfigChanged()
+            rebuild(force = true)
+        }
+    }
+
+    private fun catalog(): Map<String, List<Slide>> {
+        val result = linkedMapOf<String, List<Slide>>()
+        for (url in Albums.enabled(prefs)) result[url] = AlbumCache.read(prefs, url).orEmpty()
         val local = LocalUploads.slides(this)
-        val merged = currentAlbums.flatMap { AlbumCache.read(prefs, it) ?: emptyList() } + local
-        if (merged.isEmpty()) return
-        currentIds = idsOf(merged)
-        val newest = local.firstOrNull()?.id
-        if (newest != null) {
-            // Show the just-pushed photo immediately (crossfades to it).
-            controller.setItemsShowing(merged, newest)
-        } else {
-            controller.setItems(merged)
+        if (local.isNotEmpty()) result[PlaybackPolicy.LOCAL_ALBUM] = local
+        if (Albums.list(prefs).isEmpty() && local.isEmpty()) {
+            result[PlaybackPolicy.SAMPLE_ALBUM] =
+                assets.list("slides").orEmpty()
+                    .filter { it.endsWith(".jpg") || it.endsWith(".png") }.sorted()
+                    .map { Slide("slides/$it", null) }
         }
+        return result
     }
 
-    private val refreshTick = object : Runnable {
-        override fun run() {
-            fetchAllAndApply(false)
-            handler.postDelayed(this, REFRESH_INTERVAL_MS)
+    private fun rebuild(
+        force: Boolean = false,
+        restart: Boolean = false,
+    ) {
+        if (!active) return
+        val portrait = resources.displayMetrics.heightPixels > resources.displayMetrics.widthPixels
+        val catalog =
+            catalog().mapValues { (_, slides) ->
+                slides.map { slide -> withDimensions(slide) }
+            }
+        eligible =
+            catalog.mapValues { (_, slides) ->
+                slides.filter { PlaybackPolicy.matches(it, orientation, portrait) }
+            }
+        currentAlbum = PlaybackPolicy.selectedAlbum(eligible, currentAlbum, mode)
+        val items = PlaybackPolicy.items(eligible, currentAlbum, mode)
+        val nextSignature = "$currentAlbum|$mode|" + items.joinToString { "${it.id}:${it.width}:${it.height}" }
+        if (force || nextSignature != signature) {
+            signature = nextSignature
+            applyItems(items, restart)
         }
+        // Legacy caches and uploads lack bounds. Probe headers off the UI thread; never decode full bitmaps.
+        catalog.values.flatten().distinctBy { it.id }.filter { it.width <= 0 || it.height <= 0 }
+            .forEach { probe(it) }
     }
 
-    /**
-     * Fetch every configured album in the background; cache each and re-apply the merged
-     * photo set as each one lands (only when the set actually changed, to avoid flicker).
-     */
-    private fun fetchAllAndApply(showHint: Boolean) {
-        val albums = currentAlbums
-        if (albums.isEmpty()) {
+    private fun withDimensions(slide: Slide): Slide {
+        val bounds = dimensions[slide.id] ?: return slide
+        return Slide(slide.id, slide.caption, slide.timeMs, bounds.portrait, bounds.width, bounds.height)
+    }
+
+    private fun applyItems(
+        items: List<Slide>,
+        restart: Boolean,
+    ) {
+        if (items.isEmpty()) {
+            controller.showEmpty(emptyMessage())
             return
         }
-        val prefs = getSharedPreferences(ConfigReceiver.PREFS, MODE_PRIVATE)
-        for (url in albums) {
+        val current = controller.currentId().takeUnless { restart }
+        if (current != null && items.any { it.id == current }) {
+            controller.setItemsShowing(items, current, instant = true)
+        } else {
+            controller.setItems(items)
+        }
+    }
+
+    private fun emptyMessage(): String {
+        if (orientation == PlaybackPolicy.Orientation.ALL) return "No photos in the selected albums"
+        val portrait = resources.displayMetrics.heightPixels > resources.displayMetrics.widthPixels
+        val vertical =
+            orientation == PlaybackPolicy.Orientation.PORTRAIT ||
+                (orientation == PlaybackPolicy.Orientation.AUTO && portrait)
+        return "No matching ${if (vertical) "portrait" else "landscape"} photos. " +
+            "Square and unknown-size images are excluded."
+    }
+
+    private fun probe(slide: Slide) {
+        if (!probing.add(slide.id)) return
+        loader.executor().execute {
+            val resolved = loader.dimensions(slide)
+            runOnUiThread {
+                // Keep attempted ids until next refresh, so corrupt files do not cause a retry loop.
+                dimensions[slide.id] = resolved
+                if (active) rebuild()
+            }
+        }
+    }
+
+    private fun advanceAlbum(): Boolean {
+        if (mode != PlaybackPolicy.Mode.NEXT_ALBUM) return false
+        val remaining = progress.remaining(eligible[currentAlbum].orEmpty())
+        if (remaining.isNotEmpty()) {
+            controller.setItems(remaining)
+            return true
+        }
+        progress.reset()
+        currentAlbum = PlaybackPolicy.nextAlbum(eligible, currentAlbum)
+        prefs.edit().putString(ConfigReceiver.KEY_SELECTED_ALBUM, currentAlbum).apply()
+        rebuild(force = true, restart = true)
+        return true
+    }
+
+    private val refreshTick =
+        object : Runnable {
+            override fun run() {
+                if (!active) return
+                fetchAlbums()
+                handler.postDelayed(this, REFRESH_INTERVAL_MS)
+            }
+        }
+
+    private fun fetchAlbums() {
+        // Retry completed failed probes on refresh, never duplicate in-flight header reads.
+        val failed = dimensions.filterValues { it.width <= 0 || it.height <= 0 }.keys.toSet()
+        probing.removeAll(failed)
+        dimensions.keys.removeAll(failed)
+        for (url in Albums.enabled(prefs)) {
+            if (!fetching.add(url)) continue
             loader.executor().execute {
                 try {
                     val album = PhotoSources.fetch(url)
-                    if (album.slides.isNotEmpty()) {
-                        AlbumCache.write(prefs, url, album.slides, album.title)
-                    }
-                    runOnUiThread { rebuildFromCaches(showHint) }
+                    // An empty scraped response is ambiguous: retain offline cache on parser/server failure.
+                    if (album.slides.isNotEmpty()) AlbumCache.write(prefs, url, album.slides, album.title)
                 } catch (e: Exception) {
-                    Log.e(TAG, "album fetch failed: $url", e)
-                    if (showHint) {
-                        runOnUiThread { rebuildFromCaches(true) }
+                    Log.w("PortalFrame", "album refresh failed", e)
+                } finally {
+                    runOnUiThread {
+                        fetching.remove(url)
+                        if (active) rebuild()
                     }
                 }
             }
         }
     }
 
-    /** Recompute the slideshow from all albums' caches and apply it if it changed. */
-    private fun rebuildFromCaches(showHint: Boolean) {
-        val prefs = getSharedPreferences(ConfigReceiver.PREFS, MODE_PRIVATE)
-        if (currentAlbums != Albums.enabled(prefs)) {
-            return // the playing album set changed while fetching
-        }
-        val merged = currentAlbums.flatMap { AlbumCache.read(prefs, it) ?: emptyList() } +
-            LocalUploads.slides(this)
-        if (merged.isEmpty()) {
-            if (showHint) controller.setStatusHint("Couldn't load photos — retrying later")
-            return
-        }
-        val ids = idsOf(merged)
-        if (ids != currentIds) {
-            currentIds = ids
-            // Preserve whatever photo is showing (e.g. a just-pushed upload) across the
-            // rebuild instead of snapping back to index 0 when an album fetch changes the set.
-            val cur = controller.currentId()
-            if (cur != null && ids.contains(cur)) {
-                controller.setItemsShowing(merged, cur, instant = true)
-            } else {
-                controller.setItems(merged)
-            }
-        }
-    }
-
     companion object {
-        private const val TAG = "PortalFrame"
-        private const val REFRESH_INTERVAL_MS = 20 * 60 * 1000L // 20 min
-
-        // Lux thresholds for clock-only mode, with hysteresis to avoid flicker near the edge.
+        private const val REFRESH_INTERVAL_MS = 20 * 60 * 1000L
         private const val LOW_LUX = 8f
         private const val HIGH_LUX = 25f
-
-        private fun idsOf(slides: List<Slide>): List<String> {
-            val ids = ArrayList<String>(slides.size)
-            for (s in slides) {
-                ids.add(s.id)
-            }
-            return ids
-        }
     }
 }

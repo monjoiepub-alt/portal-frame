@@ -23,7 +23,12 @@ internal object AlbumCache {
 
     /** Persist [photos] (and [title]) as the cache for [url]. */
     @JvmStatic
-    fun write(prefs: SharedPreferences, url: String, photos: List<Slide>, title: String?) {
+    fun write(
+        prefs: SharedPreferences,
+        url: String,
+        photos: List<Slide>,
+        title: String?,
+    ) {
         val arr = JSONArray()
         for (s in photos) {
             try {
@@ -32,7 +37,9 @@ internal object AlbumCache {
                         .put("u", s.id)
                         .put("c", s.caption ?: "")
                         .put("t", s.timeMs)
-                        .put("pt", s.portrait),
+                        .put("pt", s.portrait)
+                        .put("w", s.width)
+                        .put("h", s.height),
                 )
             } catch (ignored: JSONException) {
                 continue
@@ -48,7 +55,10 @@ internal object AlbumCache {
         Log.i(TAG, "cached ${photos.size} photos for album")
     }
 
-    private fun readObj(prefs: SharedPreferences, url: String?): JSONObject? {
+    private fun readObj(
+        prefs: SharedPreferences,
+        url: String?,
+    ): JSONObject? {
         if (url == null) return null
         val blob = prefs.getString(key(url), null) ?: return null
         return try {
@@ -61,7 +71,10 @@ internal object AlbumCache {
 
     /** The cached photos for [url], or `null` if not cached. */
     @JvmStatic
-    fun read(prefs: SharedPreferences, url: String?): List<Slide>? {
+    fun read(
+        prefs: SharedPreferences,
+        url: String?,
+    ): List<Slide>? {
         val arr = readObj(prefs, url)?.optJSONArray("photos") ?: return null
         val out = ArrayList<Slide>()
         for (i in 0 until arr.length()) {
@@ -74,6 +87,8 @@ internal object AlbumCache {
                     o.optString("c", "").ifEmpty { null },
                     o.optLong("t", Slide.NO_DATE),
                     o.optBoolean("pt", false),
+                    o.optInt("w", 0),
+                    o.optInt("h", 0),
                 ),
             )
         }
@@ -82,17 +97,24 @@ internal object AlbumCache {
 
     /** The cached album title for [url] (may be empty), or `null` if not cached. */
     @JvmStatic
-    fun title(prefs: SharedPreferences, url: String?): String? =
-        readObj(prefs, url)?.optString("title", "")
+    fun title(
+        prefs: SharedPreferences,
+        url: String?,
+    ): String? = readObj(prefs, url)?.optString("title", "")
 
     /** The first cached photo id (URL) for [url], or `null` if none cached. */
     @JvmStatic
-    fun firstId(prefs: SharedPreferences, url: String?): String? =
-        read(prefs, url)?.firstOrNull()?.id
+    fun firstId(
+        prefs: SharedPreferences,
+        url: String?,
+    ): String? = read(prefs, url)?.firstOrNull()?.id
 
     /** Drop the cache for [url] (when an album is removed). */
     @JvmStatic
-    fun delete(prefs: SharedPreferences, url: String) {
+    fun delete(
+        prefs: SharedPreferences,
+        url: String,
+    ) {
         prefs.edit().remove(key(url)).apply()
     }
 }

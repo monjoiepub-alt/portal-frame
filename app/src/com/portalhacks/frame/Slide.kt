@@ -7,14 +7,20 @@ package com.portalhacks.frame
  * the photo's local wall clock, or [NO_DATE] when unknown), and whether the photo
  * is portrait (taller than wide) for side-by-side pairing.
  */
-class Slide @JvmOverloads constructor(
-    @JvmField val id: String,
-    @JvmField val caption: String?, // caption override, or null to derive from timeMs
-    @JvmField val timeMs: Long = NO_DATE, // capture instant (tz-adjusted) or NO_DATE
-    @JvmField val portrait: Boolean = false,
-) {
-    companion object {
-        /** Sentinel for "no capture date available" (e.g. bundled sample slides). */
-        const val NO_DATE: Long = Long.MIN_VALUE
+class Slide
+    @JvmOverloads
+    constructor(
+        @JvmField val id: String,
+        // Caption override, or null to derive from timeMs.
+        @JvmField val caption: String?,
+        // Capture instant (tz-adjusted) or NO_DATE.
+        @JvmField val timeMs: Long = NO_DATE,
+        @JvmField val portrait: Boolean = false,
+        @JvmField val width: Int = 0,
+        @JvmField val height: Int = 0,
+    ) {
+        companion object {
+            /** Sentinel for "no capture date available" (e.g. bundled sample slides). */
+            const val NO_DATE: Long = Long.MIN_VALUE
+        }
     }
-}
