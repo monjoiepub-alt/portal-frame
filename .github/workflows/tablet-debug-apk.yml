@@ -72,7 +72,7 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$validation_apk"
           cp "$validation_apk" artifact/Frame-validation-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk" > artifact/signing-certificate.txt
-          printf 'Commit: %s\nVersion: 1.2.2-tablet (16)\nValidation package: com.portalhacks.frame.validation\n' "$GITHUB_SHA" > artifact/build-info.txt
+          printf 'Commit: %s\nVersion: 1.2.3-tablet (17)\nValidation package: com.portalhacks.frame.validation\n' "$GITHUB_SHA" > artifact/build-info.txt
           cd artifact
           sha256sum Frame-tablet-fix-debug.apk > Frame-tablet-fix-debug.apk.sha256
           sha256sum Frame-validation-debug.apk > Frame-validation-debug.apk.sha256

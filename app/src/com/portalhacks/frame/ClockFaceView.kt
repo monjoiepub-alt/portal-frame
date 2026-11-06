@@ -50,8 +50,7 @@ class ClockFaceView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         val c = Calendar.getInstance()
-        var h = c.get(Calendar.HOUR)
-        if (h == 0) h = 12
+        val h = c.get(Calendar.HOUR_OF_DAY)
         val hh = if (h < 10) "0$h" else "$h"
         val mm = c.get(Calendar.MINUTE).let { if (it < 10) "0$it" else "$it" }
         when (face) {

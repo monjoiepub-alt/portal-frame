@@ -53,16 +53,31 @@ class SlideshowComposeActivity : ComponentActivity() {
     private val settings get() = PlaybackSettings.read(prefs)
     private val sensorManager by lazy { getSystemService(SENSOR_SERVICE) as SensorManager }
     private val lightSensor by lazy { sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT) }
+    private val lowLight = LowLightPolicy()
+    private var lightModeActive = false
+    private var lightRegistered = false
+    private var lastLightLog = 0L
+    private var lastLux = Float.NaN
+    private val lightTick =
+        object : Runnable {
+            override fun run() {
+                if (!active || !lightRegistered) return
+                val enabled = prefs.getBoolean(ConfigReceiver.KEY_CLOCK_LOW_LIGHT, false)
+                applyLowLight(lowLight.sample(enabled, lastLux, now()))
+                handler.postDelayed(this, 1000)
+            }
+        }
     private val lightListener =
         object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
                 val lux = event.values.firstOrNull() ?: return
-                if (lux <= LOW_LUX || lux >= HIGH_LUX) {
-                    val dark = lux <= LOW_LUX
-                    timer.hold("light", dark, now())
-                    controller.setClockOnly(dark)
-                    scheduleAuto()
+                lastLux = lux
+                val enabled = prefs.getBoolean(ConfigReceiver.KEY_CLOCK_LOW_LIGHT, false)
+                if (now() - lastLightLog >= 1000) {
+                    Log.d("FrameDisplay", "ambient lux=$lux enabled=$enabled clockOnly=$lightModeActive")
+                    lastLightLog = now()
                 }
+                applyLowLight(lowLight.sample(enabled, lux, now()))
             }
 
             override fun onAccuracyChanged(
@@ -89,6 +104,7 @@ class SlideshowComposeActivity : ComponentActivity() {
                     timer.reset(now())
                 }
                 createRenderer()
+                updateLightMonitoring()
                 refreshPlayback(force = true)
             }
         }
@@ -142,7 +158,45 @@ class SlideshowComposeActivity : ComponentActivity() {
                     if (action == TouchZones.Action.PAUSE) togglePause() else navigate(action)
                 }
                 freezeMotion(timer.userPaused)
+                setClockOnly(lightModeActive)
             }
+    }
+
+    private fun updateLightMonitoring() {
+        val enabled = prefs.getBoolean(ConfigReceiver.KEY_CLOCK_LOW_LIGHT, false)
+        handler.removeCallbacks(lightTick)
+        sensorManager.unregisterListener(lightListener)
+        lightRegistered = false
+        if (enabled) {
+            lightSensor?.let {
+                lightRegistered = sensorManager.registerListener(lightListener, it, SensorManager.SENSOR_DELAY_NORMAL)
+            }
+            if (lightRegistered) handler.postDelayed(lightTick, 1000)
+        } else {
+            lastLux = Float.NaN
+            lowLight.reset()
+            applyLowLight(false)
+        }
+        Log.i("FrameDisplay", "ambient monitor enabled=$enabled registered=$lightRegistered")
+    }
+
+    private fun applyLowLight(on: Boolean) {
+        if (!active || lightModeActive == on) return
+        lightModeActive = on
+        Log.i(
+            "FrameDisplay",
+            "clockOnly=$on reason=ambient-light optIn=" + prefs.getBoolean(ConfigReceiver.KEY_CLOCK_LOW_LIGHT, false),
+        )
+        timer.hold("light", on, now())
+        if (on) {
+            renderToken++
+            pending = null
+            controller.cancelPresentation()
+            timer.hold("loading", false, now())
+        }
+        controller.setClockOnly(on)
+        if (!on) refreshPlayback(force = true)
+        scheduleAuto()
     }
 
     private fun openMenu() {
@@ -197,11 +251,7 @@ class SlideshowComposeActivity : ComponentActivity() {
             IntentFilter(DropServerService.ACTION_UPLOAD),
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
-        if (prefs.getBoolean(ConfigReceiver.KEY_CLOCK_LOW_LIGHT, ConfigReceiver.DEFAULT_CLOCK_LOW_LIGHT)) {
-            lightSensor?.let { sensorManager.registerListener(lightListener, it, SensorManager.SENSOR_DELAY_NORMAL) }
-        } else {
-            timer.hold("light", false, now())
-        }
+        updateLightMonitoring()
         fetchAlbums()
         handler.postDelayed(refreshTick, REFRESH_INTERVAL_MS)
     }
@@ -215,6 +265,12 @@ class SlideshowComposeActivity : ComponentActivity() {
         handler.removeCallbacks(autoTick)
         handler.removeCallbacks(applySettings)
         sensorManager.unregisterListener(lightListener)
+        handler.removeCallbacks(lightTick)
+        lastLux = Float.NaN
+        lightRegistered = false
+        lowLight.reset()
+        lightModeActive = false
+        timer.hold("light", false, now())
         unregisterReceiver(uploadReceiver)
         prefs.unregisterOnSharedPreferenceChangeListener(preferenceListener)
         controller.stop()
@@ -445,8 +501,6 @@ class SlideshowComposeActivity : ComponentActivity() {
 
     companion object {
         private const val REFRESH_INTERVAL_MS = 20 * 60 * 1000L
-        private const val LOW_LUX = 8f
-        private const val HIGH_LUX = 25f
         private val sourceKeys = setOf(ConfigReceiver.KEY_ALBUMS, ConfigReceiver.KEY_ALBUMS_DISABLED)
         private val playbackKeys =
             setOf(
@@ -459,6 +513,12 @@ class SlideshowComposeActivity : ComponentActivity() {
                 ConfigReceiver.KEY_ON_THIS_DAY,
                 ConfigReceiver.KEY_ALBUMS,
                 ConfigReceiver.KEY_ALBUMS_DISABLED,
+                ConfigReceiver.KEY_CLOCK,
+                ConfigReceiver.KEY_CLOCK_FACE,
+                ConfigReceiver.KEY_CLOCK_DATE,
+                ConfigReceiver.KEY_WEATHER,
+                ConfigReceiver.KEY_CLOCK_LOW_LIGHT,
+                ConfigReceiver.KEY_NIGHT,
             )
     }
 }

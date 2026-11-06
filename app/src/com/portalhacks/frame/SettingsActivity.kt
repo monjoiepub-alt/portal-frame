@@ -320,10 +320,23 @@ class SettingsActivity : ComponentActivity() {
                     { openGroup = if (openGroup == "Clock & night") null else "Clock & night" },
                 ) {
                     ToggleRow(
-                        "Clock & weather",
+                        "Clock overlay",
                         ConfigReceiver.KEY_CLOCK,
                         true,
-                        subtitle = "Long-press the clock on the screensaver to move or resize it.",
+                        subtitle = "24-hour HH:mm. Long press the slideshow to move or resize the clock.",
+                    ) { tick++ }
+                    Divider()
+                    ToggleRow(
+                        "Date under clock",
+                        ConfigReceiver.KEY_CLOCK_DATE,
+                        prefs.getString(ConfigReceiver.KEY_CLOCK_FACE, ConfigReceiver.DEFAULT_CLOCK_FACE) != "minimal",
+                    ) { tick++ }
+                    Divider()
+                    ToggleRow(
+                        "Temperature (°C)",
+                        ConfigReceiver.KEY_WEATHER,
+                        true,
+                        subtitle = "Open-Meteo weather using approximate network-IP location. Requires Internet.",
                     ) { tick++ }
                     Divider()
                     var clockFaceId by remember {
@@ -349,9 +362,10 @@ class SettingsActivity : ComponentActivity() {
                     }
                     Divider()
                     ToggleRow(
-                        "Only clock in low light",
+                        "Clock-only in sustained darkness",
                         ConfigReceiver.KEY_CLOCK_LOW_LIGHT,
                         ConfigReceiver.DEFAULT_CLOCK_LOW_LIGHT,
+                        subtitle = "Off by default. Optional: below 8 lux for 15 seconds; photos return above 25 lux.",
                     ) { tick++ }
                     Divider()
                     ToggleRow("Night warmth", ConfigReceiver.KEY_NIGHT, true) { tick++ }
@@ -770,7 +784,8 @@ class SettingsActivity : ComponentActivity() {
         subtitle: String? = null,
         onChanged: () -> Unit,
     ) {
-        var on by remember(key) { mutableStateOf(prefs.getBoolean(key, def)) }
+        val revision = rememberPreferenceRevision(prefs)
+        val on = remember(prefs, key, def, revision) { prefs.getBoolean(key, def) }
         Row(
             Modifier.fillMaxWidth().padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -784,7 +799,6 @@ class SettingsActivity : ComponentActivity() {
             Switch(
                 checked = on,
                 onCheckedChange = {
-                    on = it
                     prefs.edit().putBoolean(key, it).apply()
                     onChanged()
                 },

@@ -62,6 +62,7 @@ class SlideshowActivityTest {
 
     @Test fun livePreferencesAndRotationReachActualRenderedPhotos() {
         prefs.edit().clear().putBoolean(ConfigReceiver.KEY_CLOCK_LOW_LIGHT, false)
+            .putBoolean(ConfigReceiver.KEY_WEATHER, false)
             .putBoolean(ConfigReceiver.KEY_CLOCK, false).putLong(ConfigReceiver.KEY_DELAY_MS, 60_000).commit()
         LocalUploads.clearAll(context)
         val wide = photo("wide.jpg", 80, 40)

@@ -24,14 +24,16 @@ internal object Weather {
         @JvmField val temp: Int,
         @JvmField val moon: Boolean,
     ) {
-        /** e.g. "☀️ 72°" */
-        fun label(): String = "$emoji $temp°"
+        /** Explicit Celsius, independent of the device locale. */
+        fun label(): String = "$emoji $temp°C"
     }
 
     @JvmStatic
-    fun fetch(fahrenheit: Boolean): Now? {
+    fun fetch(): Now? = fetch(::httpGet)
+
+    internal fun fetch(read: (String) -> String): Now? {
         return try {
-            val geo = JSONObject(httpGet("https://get.geojs.io/v1/ip/geo.json"))
+            val geo = JSONObject(read("https://get.geojs.io/v1/ip/geo.json"))
             val lat = geo.optString("latitude", "")
             val lon = geo.optString("longitude", "")
             if (lat.isEmpty() || lon.isEmpty()) {
@@ -40,9 +42,10 @@ internal object Weather {
             val url = "https://api.open-meteo.com/v1/forecast?latitude=" + lat +
                 "&longitude=" + lon +
                 "&current=temperature_2m,weather_code,is_day" +
-                "&temperature_unit=" + (if (fahrenheit) "fahrenheit" else "celsius")
-            val cur = JSONObject(httpGet(url)).getJSONObject("current")
+                "&temperature_unit=celsius"
+            val cur = JSONObject(read(url)).getJSONObject("current")
             val t = cur.getDouble("temperature_2m")
+            if (!t.isFinite()) return null
             val code = cur.optInt("weather_code", 0)
             val day = cur.optInt("is_day", 1) == 1
             val moon = !day && (code == 0 || code == 1) // clear / mainly-clear night

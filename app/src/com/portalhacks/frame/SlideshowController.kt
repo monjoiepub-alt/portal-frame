@@ -19,6 +19,7 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.Spannable
 import android.text.SpannableStringBuilder
 import android.text.style.ImageSpan
@@ -85,10 +86,12 @@ class SlideshowController(
     private val timeFmt: DateFormat
     private val dateFmt = SimpleDateFormat("EEE, MMM d", Locale.getDefault())
     private val monthYearFmt = SimpleDateFormat("MMM yyyy", Locale.getDefault())
-    private val fahrenheit = "US" == Locale.getDefault().country
     private val nightTint: View // warm overlay that fades in at night (Ambient-EQ-lite)
     private val ambientGlow: View // edge vignette tinted to the photo's mood color
     private var weather: Weather.Now? = null // current reading; null until loaded
+    private var weatherFailed = false
+    private var weatherFetching = false
+    private var nextWeatherAt = 0L
     private val moonDrawable: Drawable // blue crescent, clear nights
     private val handler = Handler(Looper.getMainLooper())
     private var reqW: Int
@@ -117,6 +120,8 @@ class SlideshowController(
     private val pairs: Boolean // pair two photos to fill the screen (side-by-side or stacked)
     private val kenBurns: Boolean // cinematic slow pan + zoom while held
     private val showClock: Boolean // clock + weather overlay
+    private val showDate: Boolean
+    private val showWeather: Boolean
     private val clockFaceId: String // which overlay clock style to draw (see applyClockFace)
     private val nightMode: Boolean // warm night dimming
     private val onThisDay: Boolean // surface "N years ago today" memories
@@ -188,6 +193,9 @@ class SlideshowController(
         showClock = prefs.getBoolean(ConfigReceiver.KEY_CLOCK, ConfigReceiver.DEFAULT_CLOCK)
         clockFaceId = prefs.getString(ConfigReceiver.KEY_CLOCK_FACE, ConfigReceiver.DEFAULT_CLOCK_FACE)
             ?: ConfigReceiver.DEFAULT_CLOCK_FACE
+        showDate = prefs.getBoolean(ConfigReceiver.KEY_CLOCK_DATE, clockFaceId != "minimal")
+        showWeather = prefs.getBoolean(ConfigReceiver.KEY_WEATHER, true)
+        Log.i("FrameDisplay", "overlays clock=$showClock date=$showDate weather=$showWeather time24h=true")
         nightMode = prefs.getBoolean(ConfigReceiver.KEY_NIGHT, ConfigReceiver.DEFAULT_NIGHT)
         onThisDay = !orderedAlbums &&
             prefs.getBoolean(ConfigReceiver.KEY_ON_THIS_DAY, ConfigReceiver.DEFAULT_ON_THIS_DAY)
@@ -282,7 +290,7 @@ class SlideshowController(
         // (Nest/Portal photo-frame style). Time uses a clean, AM/PM-free format.
         timeFmt =
             SimpleDateFormat(
-                if (android.text.format.DateFormat.is24HourFormat(context)) "H:mm" else "h:mm",
+                "HH:mm",
                 Locale.getDefault(),
             )
         clock = TextView(context)
@@ -302,6 +310,9 @@ class SlideshowController(
         dateLine.setShadowLayer(8f, 0f, 1f, Color.BLACK)
         clockBox = LinearLayout(context)
         clockBox.orientation = LinearLayout.VERTICAL
+        clockBox.background = Ui.roundRect(0x55000000, Ui.dp(context, 10f))
+        val clockPadding = Ui.dp(context, 8f)
+        clockBox.setPadding(clockPadding, clockPadding, clockPadding, clockPadding)
         clockBox.addView(clock)
         clockBox.addView(dateLine)
         clockFaceView = ClockFaceView(context)
@@ -493,7 +504,7 @@ class SlideshowController(
             )
         clockOnlyScrim.visibility = View.GONE
 
-        if (!showClock) {
+        if (!showClock && !showWeather) {
             clockBox.visibility = View.GONE
         }
         if (!captions) {
@@ -522,7 +533,7 @@ class SlideshowController(
         // Run clock/night + weather + shimmer from the start so they're alive even
         // during the initial "Loading…" wait before the first photo arrives.
         startClock()
-        if (showClock) {
+        if (showWeather) {
             startWeather()
         }
         startFortune()
@@ -747,23 +758,22 @@ class SlideshowController(
      * The user's move/resize transform ([applyClockTransform]) still composes on top of this.
      */
     private fun applyClockFace() {
+        dateLine.visibility = if ((showClock && showDate) || showWeather) View.VISIBLE else View.GONE
+        bigDate.visibility = if (showDate) View.VISIBLE else View.GONE
         // The custom-drawn faces (flip/nixie/analog) replace the text clock entirely.
         if (clockFaceId in ClockFaceView.FACES) {
             clockFaceView.setFace(clockFaceId)
-            clockFaceView.visibility = View.VISIBLE
+            clockFaceView.visibility = if (showClock) View.VISIBLE else View.GONE
             clock.visibility = View.GONE
-            dateLine.visibility = View.GONE
             return
         }
         clockFaceView.visibility = View.GONE
-        clock.visibility = View.VISIBLE
+        clock.visibility = if (showClock) View.VISIBLE else View.GONE
         var timeSp = 80f
         var typeface = Ui.clockFace(context)
-        var showDate = true
         when (clockFaceId) {
             "minimal" -> {
                 timeSp = 54f
-                showDate = false
             } // just the time, quietly
             "big" -> {
                 timeSp = 132f
@@ -776,8 +786,6 @@ class SlideshowController(
         }
         clock.setTextSize(TypedValue.COMPLEX_UNIT_SP, timeSp)
         clock.typeface = typeface
-        dateLine.visibility = if (showDate) View.VISIBLE else View.GONE
-        bigDate.visibility = if (showDate) View.VISIBLE else View.GONE
     }
 
     // ------------------------------------------------ clock move/resize
@@ -819,7 +827,7 @@ class SlideshowController(
 
     private fun exitClockEdit() {
         editingClock = false
-        clockBox.background = null
+        clockBox.background = Ui.roundRect(0x55000000, Ui.dp(context, 10f))
         clockEditHint.visibility = View.GONE
         persistClockTransform()
     }
@@ -1055,7 +1063,7 @@ class SlideshowController(
     fun start() {
         running = true
         startClock()
-        if (showClock) {
+        if (showWeather) {
             startWeather()
         }
         startFortune()
@@ -1179,7 +1187,7 @@ class SlideshowController(
             if (!shimmerHidden) {
                 shimmer.startSweep()
             }
-            clockBox.visibility = if (showClock) View.VISIBLE else View.GONE
+            clockBox.visibility = if (showClock || showWeather) View.VISIBLE else View.GONE
             if (running && items.isNotEmpty()) {
                 showImmediate(index) // resume photos + auto-advance
             }
@@ -1206,7 +1214,7 @@ class SlideshowController(
         }
         handler.removeCallbacks(autoTick)
         startClock()
-        if (showClock) {
+        if (showWeather) {
             startWeather()
         }
         startFortune()
@@ -1253,7 +1261,7 @@ class SlideshowController(
         }
         handler.removeCallbacks(autoTick)
         startClock()
-        if (showClock) {
+        if (showWeather) {
             startWeather()
         }
         startFortune()
@@ -1797,19 +1805,21 @@ class SlideshowController(
         // hand is driven faster by [secondsTick]).
         if (clockFaceId in ClockFaceView.FACES) {
             if (showClock) clockFaceView.invalidate()
-            return
         }
-        if (!showClock) {
+        if (!showClock && !showWeather) {
             return // night tint still updates above; the overlay clock/weather text is off
         }
         clock.text = time
         trimLeftBearing(clock)
-        val w = weather
+        val w = weather.takeIf { showWeather }
+        val prefix = date.takeIf { showClock && showDate }.orEmpty()
         if (w == null) {
-            dateLine.text = date
+            dateLine.text =
+                listOf(prefix, if (showWeather && weatherFailed) "Weather unavailable" else "")
+                    .filter { it.isNotEmpty() }.joinToString("   ")
         } else if (w.moon) {
             // Clear night: draw a blue crescent (color emoji can't be tinted) + temp.
-            val sb = SpannableStringBuilder("$date   ")
+            val sb = SpannableStringBuilder(if (prefix.isEmpty()) "" else "$prefix   ")
             val s = sb.length
             sb.append(" ")
             sb.setSpan(
@@ -1818,10 +1828,10 @@ class SlideshowController(
                 s + 1,
                 Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
             )
-            sb.append("  ").append(w.temp.toString()).append("°")
+            sb.append("  ").append(w.temp.toString()).append("°C")
             dateLine.text = sb
         } else {
-            dateLine.text = date + "   " + w.label()
+            dateLine.text = listOf(prefix, w.label()).filter { it.isNotEmpty() }.joinToString("   ")
         }
         trimLeftBearing(dateLine)
     }
@@ -1852,14 +1862,20 @@ class SlideshowController(
     private fun startWeather() {
         handler.removeCallbacks(weatherTick)
         // Fetch immediately if we have nothing yet; otherwise keep the periodic cadence.
-        handler.postDelayed(weatherTick, if (weather == null) 0 else WEATHER_INTERVAL_MS)
+        handler.postDelayed(weatherTick, (nextWeatherAt - SystemClock.elapsedRealtime()).coerceAtLeast(0))
     }
 
     private fun refreshWeather() {
+        if (weatherFetching) return
+        weatherFetching = true
+        nextWeatherAt = SystemClock.elapsedRealtime() + WEATHER_INTERVAL_MS
         loader.executor().execute {
-            val now = Weather.fetch(fahrenheit) ?: return@execute
+            val now = Weather.fetch()
             handler.post {
+                weatherFetching = false
+                weatherFailed = now == null
                 weather = now
+                Log.i("FrameDisplay", if (now == null) "weather unavailable" else "weather received Celsius")
                 updateClock()
             }
         }

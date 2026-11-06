@@ -31,8 +31,8 @@ android {
         applicationId = "com.portalhacks.frame"
         minSdk = 28
         targetSdk = 29
-        versionCode = 16
-        versionName = "1.2.2-tablet"
+        versionCode = 17
+        versionName = "1.2.3-tablet"
         manifestPlaceholders["frameLabel"] = "Frame"
     }
 

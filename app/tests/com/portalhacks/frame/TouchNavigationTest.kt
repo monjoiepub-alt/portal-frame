@@ -19,6 +19,7 @@ class TouchNavigationTest {
     @Test fun realTouchOverlayRoutesSingleTapsAndLongPressWithoutDoubleNavigation() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         context.getSharedPreferences(ConfigReceiver.PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(ConfigReceiver.KEY_WEATHER, false)
             .putBoolean(ConfigReceiver.KEY_CLOCK, false).putBoolean(ConfigReceiver.KEY_NOTES, false).commit()
         val root = FrameLayout(context)
         val loader = ImageLoader(context)

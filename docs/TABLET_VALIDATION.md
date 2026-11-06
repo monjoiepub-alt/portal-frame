@@ -1,5 +1,7 @@
 # Lenovo validation: 1.2.2-tablet (16)
 
+For subsequent light-sensor, clock and Celsius corrections, see [DISPLAY_FIXES.md](DISPLAY_FIXES.md).
+
 Verified on 2026-11-06 using Lenovo TB328FU, Android 12/API 31, serial HA21T78E.
 Changes remain on `dev/tablet-playback-phase1`.
 
