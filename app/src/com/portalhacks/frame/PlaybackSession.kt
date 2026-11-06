@@ -20,6 +20,7 @@ internal class PlaybackSession(private val random: Random = Random.Default) {
     private val failed = mutableSetOf<String>()
     private val deck = mutableListOf<PlaybackEntry>()
     private val completed = mutableMapOf<String, MutableSet<String>>()
+    private val albumOrders = mutableMapOf<String, List<String>>()
     private var available: Map<String, List<Slide>> = emptyMap()
     var selection: String? = null
         private set
@@ -48,6 +49,7 @@ internal class PlaybackSession(private val random: Random = Random.Default) {
         if (reset || rotated || poolChanged) deck.clear()
         if (reset) {
             completed.clear()
+            albumOrders.clear()
             history.clear()
             cursor = -1
         } else {
@@ -81,7 +83,11 @@ internal class PlaybackSession(private val random: Random = Random.Default) {
             else -> {
                 val available = eligible()
                 val album = PlaybackPolicy.selectedAlbum(available, selected(), mode)
-                available[album]?.firstOrNull()?.let { frame(album!!, it) }
+                if (mode == PlaybackPolicy.Mode.NEXT_ALBUM) {
+                    album?.let { remainingInAlbum(it) ?: nextAlbumFrame(it) }
+                } else {
+                    available[album]?.firstOrNull()?.let { frame(album!!, it) }
+                }
             }
         }
 
@@ -91,22 +97,39 @@ internal class PlaybackSession(private val random: Random = Random.Default) {
         if (shuffled) {
             return shuffledNext()
         }
+        if (mode == PlaybackPolicy.Mode.NEXT_ALBUM) return nextAlbumFrame(now.album)
         val available = eligible()
         val slides = available[now.album].orEmpty()
         val step = if (now.partner == null) 1 else 2
         val index = slides.indexOfFirst { it.id == now.slide.id } + step
         if (index in slides.indices) return frame(now.album, slides[index])
-        if (mode == PlaybackPolicy.Mode.NEXT_ALBUM) {
-            slides.firstOrNull { it.id !in completed[now.album].orEmpty() }?.let { return frame(now.album, it) }
-        }
-        val album =
-            if (mode == PlaybackPolicy.Mode.NEXT_ALBUM) {
-                PlaybackPolicy.nextAlbum(available, now.album)
-            } else {
-                now.album
-            }
+        val album = now.album
         completed[album]?.clear()
-        return available[album]?.firstOrNull()?.let { frame(album!!, it) }
+        return available[album]?.firstOrNull()?.let { frame(album, it) }
+    }
+
+    private fun remainingInAlbum(album: String): PlaybackEntry? {
+        val slides = eligible()[album].orEmpty()
+        val ids = slides.map { it.id }
+        val order = albumOrders.getOrPut(album) { ids.shuffled(random) }
+        // Keep the current cycle stable, appending newly resolved photos before advancing.
+        val updated = order.filter { it in ids } + ids.filter { it !in order }
+        albumOrders[album] = updated
+        val id = updated.firstOrNull { it !in completed[album].orEmpty() } ?: return null
+        return frame(album, slides.first { it.id == id })
+    }
+
+    private fun nextAlbumFrame(album: String): PlaybackEntry? {
+        remainingInAlbum(album)?.let { return it }
+        val next = PlaybackPolicy.nextAlbum(eligible(), album) ?: return null
+        if (eligible()[next].orEmpty().all { it.id in completed[next].orEmpty() }) {
+            val previous = albumOrders[next].orEmpty()
+            var order = eligible()[next].orEmpty().map { it.id }.shuffled(random)
+            if (order.size > 1 && order == previous) order = order.drop(1) + order.first()
+            albumOrders[next] = order
+            completed[next]?.clear()
+        }
+        return remainingInAlbum(next)
     }
 
     fun previous(): PlaybackEntry? = history.take(cursor.coerceAtLeast(0)).lastOrNull { allowed(it) }

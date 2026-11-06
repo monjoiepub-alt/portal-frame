@@ -809,10 +809,10 @@ class SettingsActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun DurationEditor(onChanged: () -> Unit) {
+    internal fun DurationEditor(onChanged: () -> Unit) {
+        val revision = rememberPreferenceRevision(prefs)
         val saved =
-            getLong(ConfigReceiver.KEY_DELAY_MS, ConfigReceiver.DEFAULT_DELAY_MS)
-                .coerceIn(1000L, PlaybackPolicy.MAX_DURATION_MS)
+            remember(prefs, revision) { PlaybackSettings.read(prefs).durationMs }
         var hours by remember { mutableStateOf((saved / 3_600_000).toString()) }
         var minutes by remember { mutableStateOf((saved / 60_000 % 60).toString()) }
         var seconds by remember { mutableStateOf((saved / 1000 % 60).toString()) }

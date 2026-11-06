@@ -122,7 +122,7 @@ class ImageLoader(context: Context) {
     internal fun hasCachedSource(id: String): Boolean =
         when {
             id.startsWith("https://") -> File(cacheDir, md5(id) + ".img").let { it.isFile && it.length() > 0 }
-            id.startsWith("/") -> File(id).isFile
+            File(id).isAbsolute -> File(id).isFile
             else -> true
         }
 
@@ -163,7 +163,7 @@ class ImageLoader(context: Context) {
                 File(cacheDir, md5(id) + ".img").takeIf {
                     (it.exists() && it.length() > 0L) || download(id, it)
                 }
-            id.startsWith("/") -> File(id)
+            File(id).isAbsolute -> File(id)
             else -> null
         }
 
@@ -219,7 +219,7 @@ class ImageLoader(context: Context) {
         // Locally-pushed photos (the "AirDrop for Portal" drop) are absolute file paths
         // under filesDir/uploads — decode them straight off disk, honoring their EXIF
         // orientation (camera-roll photos store rotation in EXIF; the CDN images don't).
-        if (id.startsWith("/")) {
+        if (File(id).isAbsolute) {
             return decodeFile(id, reqW, reqH, applyExif = true)
         }
         return decodeAsset(id, reqW, reqH)

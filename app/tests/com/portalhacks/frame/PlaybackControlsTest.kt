@@ -33,7 +33,7 @@ class PlaybackControlsTest {
         compose.onNodeWithTag("orientation-auto").assertIsSelected()
         compose.onNodeWithTag("orientation-all").performClick().assertIsSelected()
         assertEquals("ALL", PlaybackSettings.read(prefs).orientation.name)
-        compose.onNodeWithTag("orientation-manual").performClick().assertIsSelected()
+        compose.onNodeWithTag("orientation-LANDSCAPE").performClick().assertIsSelected()
         compose.onNodeWithTag("orientation-PORTRAIT").performClick().assertIsSelected()
         assertEquals("PORTRAIT", PlaybackSettings.read(prefs).orientation.name)
         compose.onNodeWithTag("orientation-auto").performClick().assertIsSelected()
@@ -55,7 +55,7 @@ class PlaybackControlsTest {
                 "b" to listOf(Slide("b", null, width = 400, height = 800)),
             )
         prefs.edit().putString(ConfigReceiver.KEY_SELECTED_ALBUM, "a").commit()
-        compose.onNodeWithTag("orientation-manual").performClick()
+        compose.onNodeWithTag("orientation-LANDSCAPE").performClick()
         compose.onNodeWithTag("orientation-PORTRAIT").performClick()
         compose.onNodeWithTag("mode-REPEAT_CURRENT").performClick()
         val session = PlaybackSession()

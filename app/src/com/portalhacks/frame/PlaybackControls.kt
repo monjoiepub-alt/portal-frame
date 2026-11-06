@@ -11,9 +11,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -28,41 +26,26 @@ internal fun PlaybackControls(
     prefs: SharedPreferences,
     localAvailable: Boolean,
 ) {
-    var revision by remember(prefs) { mutableIntStateOf(0) }
-    DisposableEffect(prefs) {
-        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> revision++ }
-        prefs.registerOnSharedPreferenceChangeListener(listener)
-        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
-    }
+    val revision = rememberPreferenceRevision(prefs)
     val settings = remember(prefs, revision) { PlaybackSettings.read(prefs) }
     Column {
-        Text("Photo orientation")
-        Row {
-            Choice("AUTO", "orientation-auto", settings.orientation == PlaybackPolicy.Orientation.AUTO) {
-                prefs.edit().putString(ConfigReceiver.KEY_ORIENTATION, "AUTO").apply()
-            }
-            Choice("MANUAL", "orientation-manual", settings.orientation in manualOrientations) {
-                if (settings.orientation !in manualOrientations) {
-                    prefs.edit().putString(ConfigReceiver.KEY_ORIENTATION, "LANDSCAPE").apply()
+        Text("Photo orientation", color = PortalColors.Text)
+        PlaybackPolicy.Orientation.entries.forEach { value ->
+            val tag =
+                when (value) {
+                    PlaybackPolicy.Orientation.AUTO, PlaybackPolicy.Orientation.ALL -> value.name.lowercase()
+                    else -> value.name
                 }
-            }
-            Choice("ALL", "orientation-all", settings.orientation == PlaybackPolicy.Orientation.ALL) {
-                prefs.edit().putString(ConfigReceiver.KEY_ORIENTATION, "ALL").apply()
+            Choice(value.name, "orientation-$tag", settings.orientation == value) {
+                prefs.edit().putString(ConfigReceiver.KEY_ORIENTATION, value.name).apply()
             }
         }
-        if (settings.orientation in manualOrientations) {
-            manualOrientations.forEach { value ->
-                Choice(
-                    value.name.lowercase().replaceFirstChar { it.uppercase() },
-                    "orientation-${value.name}",
-                    settings.orientation == value,
-                ) {
-                    prefs.edit().putString(ConfigReceiver.KEY_ORIENTATION, value.name).apply()
-                }
-            }
-        }
-        Text("Auto follows the tablet. Auto and Manual exclude square/unknown images and show whole photos.")
-        Text("Album playback")
+        Text(
+            "Auto follows the screen. Auto, Landscape and Portrait exclude square/unknown images " +
+                "and show whole photos.",
+            color = PortalColors.TextMuted,
+        )
+        Text("Album playback", color = PortalColors.Text)
         PlaybackPolicy.Mode.entries.forEach { value ->
             Choice(modeLabel(value), "mode-${value.name}", settings.mode == value) {
                 prefs.edit().putString(ConfigReceiver.KEY_PLAYBACK_MODE, value.name).apply()
@@ -71,8 +54,6 @@ internal fun PlaybackControls(
         AlbumChoice(prefs, settings.album, localAvailable, revision)
     }
 }
-
-private val manualOrientations = listOf(PlaybackPolicy.Orientation.LANDSCAPE, PlaybackPolicy.Orientation.PORTRAIT)
 
 private fun modeLabel(mode: PlaybackPolicy.Mode): String =
     when (mode) {
@@ -89,11 +70,11 @@ private fun Choice(
     onSelect: () -> Unit,
 ) {
     Row(
-        Modifier.testTag(tag).selectable(selected, role = Role.RadioButton, onClick = onSelect),
+        Modifier.fillMaxWidth().testTag(tag).selectable(selected, role = Role.RadioButton, onClick = onSelect),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioButton(selected = selected, onClick = null)
-        Text(label)
+        Text(label, color = PortalColors.Text)
     }
 }
 
@@ -130,6 +111,9 @@ private fun AlbumChoice(
                 })
             }
         }
-        Text("Repeat and Next use the selection. Shuffle All mixes every enabled album and local uploads.")
+        Text(
+            "Repeat and Next use the selection. Shuffle All mixes every enabled album and local uploads.",
+            color = PortalColors.TextMuted,
+        )
     }
 }

@@ -30,10 +30,10 @@ class PlaybackSessionTest {
         session.configure(albums, options(), false)
         val first = session.initial()!!
         session.shown(first)
-        assertEquals("a1", first.slide.id)
+        assertEquals("a", first.album)
         val second = session.next()!!
         session.shown(second)
-        assertEquals("a3", second.slide.id)
+        assertEquals(setOf("a1", "a3"), setOf(first.slide.id, second.slide.id))
         val third = session.next()!!
         session.shown(third)
         assertEquals("b1", third.slide.id)
@@ -41,7 +41,7 @@ class PlaybackSessionTest {
         session.shown(session.previous()!!)
         assertSame(third, session.next())
         session.shown(third)
-        assertEquals("a1", session.next()!!.slide.id)
+        assertTrue(session.next()!!.slide.id in setOf("a1", "a3"))
     }
 
     @Test fun repeatNeverEscapesSelectedAlbumAndSwitchingModesAppliesImmediately() {
@@ -61,7 +61,8 @@ class PlaybackSessionTest {
     @Test fun filteringIsReappliedOnEveryRotationAndInvalidHistoryIsRemoved() {
         val session = PlaybackSession()
         session.configure(albums, options(), false)
-        session.shown(session.initial()!!)
+        val first = session.initial()!!
+        session.shown(first)
         session.configure(albums, options(), true)
         assertNull(session.current)
         assertNull(session.previous())
@@ -69,7 +70,7 @@ class PlaybackSessionTest {
         session.shown(session.initial()!!)
         assertEquals("b2", session.next()!!.slide.id)
         session.configure(albums, options(), false)
-        assertEquals("a1", session.initial()!!.slide.id)
+        assertEquals((setOf("a1", "a3") - first.slide.id).single(), session.initial()!!.slide.id)
     }
 
     @Test fun manualPortraitIgnoresPhysicalRotationAndAllIncludesBoth() {
@@ -91,11 +92,13 @@ class PlaybackSessionTest {
     @Test fun disabledAlbumsAndStaleDimensionsCannotBeNavigatedBackTo() {
         val session = PlaybackSession()
         session.configure(albums, options(), false)
-        session.shown(session.initial()!!)
-        val corrected = albums.toMutableMap().apply { put("a", listOf(tall("a1"), wide("a3"))) }
+        val first = session.initial()!!
+        session.shown(first)
+        val remaining = (setOf("a1", "a3") - first.slide.id).single()
+        val corrected = albums.toMutableMap().apply { put("a", listOf(tall(first.slide.id), wide(remaining))) }
         session.configure(corrected, options(), false)
         assertNull(session.current)
-        assertEquals("a3", session.initial()!!.slide.id)
+        assertEquals(remaining, session.initial()!!.slide.id)
         session.configure(mapOf("b" to albums.getValue("b")), options(), false)
         assertEquals("b1", session.initial()!!.slide.id)
         assertNull(session.previous())
@@ -109,16 +112,60 @@ class PlaybackSessionTest {
         assertEquals("new", session.next()!!.slide.id)
     }
 
+    @Test fun lateResolvedPhotoDoesNotReplayCompletedPhotosBeforeAdvancing() {
+        val session = PlaybackSession()
+        val initial = mapOf("a" to listOf(wide("a1"), wide("a3")), "b" to listOf(wide("b1")))
+        session.configure(initial, options(), false)
+        session.shown(session.initial()!!)
+        session.shown(session.next()!!)
+        session.configure(
+            initial + ("a" to listOf(wide("a1"), wide("a2"), wide("a3"))),
+            options(),
+            false,
+        )
+        val late = session.next()!!
+        assertEquals("a2", late.slide.id)
+        session.shown(late)
+        assertEquals("b1", session.next()!!.slide.id)
+    }
+
+    @Test fun nextAlbumVisitsEachPhotoOnceAndReshufflesEveryReturningCycle() {
+        val session = PlaybackSession(Random(42))
+        val sources =
+            linkedMapOf(
+                "a" to (1..5).map { wide("a$it") },
+                "b" to (1..3).map { wide("b$it") },
+            )
+        session.configure(sources, options(), false)
+        val cycles = mutableListOf<List<String>>()
+        repeat(3) {
+            val cycle = mutableListOf<String>()
+            repeat(8) {
+                val entry = session.next()!!
+                cycle.add(entry.slide.id)
+                session.shown(entry)
+                // Match the Activity's persisted automatic album advance on each frame.
+                session.configure(sources, options(album = session.selection!!), false)
+            }
+            assertEquals(sources.getValue("a").map { it.id }.toSet(), cycle.take(5).toSet())
+            assertEquals(sources.getValue("b").map { it.id }.toSet(), cycle.drop(5).toSet())
+            cycles.add(cycle)
+        }
+        assertTrue(cycles[0].take(5) != cycles[1].take(5))
+        assertTrue(cycles[1].take(5) != cycles[2].take(5))
+    }
+
     @Test fun failedLoadsDoNotEnterHistoryOrTrapTraversal() {
         val session = PlaybackSession()
         session.configure(albums, options(), false)
-        session.shown(session.initial()!!)
+        val first = session.initial()!!
+        session.shown(first)
         val failed = session.next()!!
         session.reject(failed)
         val next = session.next()!!
         assertEquals("b1", next.slide.id)
         session.shown(next)
-        assertEquals("a1", session.previous()!!.slide.id)
+        assertEquals(first.slide.id, session.previous()!!.slide.id)
     }
 
     @Test fun squareAndUnknownOnlyAlbumsHaveARealEmptyState() {
@@ -204,6 +251,6 @@ class PlaybackSessionTest {
             session.shown(frame)
         }
         session.configure(albums, options().copy(shuffle = true), false)
-        assertEquals("a1", session.initial()!!.slide.id)
+        assertTrue(session.initial()!!.slide.id in setOf("a1", "a3"))
     }
 }

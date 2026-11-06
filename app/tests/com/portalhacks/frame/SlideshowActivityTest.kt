@@ -93,7 +93,7 @@ class SlideshowActivityTest {
                 View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.EXACTLY),
             )
             root.layout(0, 0, 900, 600)
-            await { ReflectionHelpers.getField<PlaybackEntry?>(activity, "pending") == null }
+            await { session.current?.slide?.id == wide.path && ReflectionHelpers.getField<PlaybackEntry?>(activity, "pending") == null }
             val timer = ReflectionHelpers.getField<PlaybackTimer>(activity, "timer")
 
             fun tap(x: Float) {
@@ -111,7 +111,7 @@ class SlideshowActivityTest {
             val remaining = timer.remaining(SystemClock.elapsedRealtime())
             shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(30))
             assertEquals(remaining, timer.remaining(SystemClock.elapsedRealtime()))
-            assertEquals(rotated.path, session.current?.slide?.id)
+            assertEquals(wide.path, session.current?.slide?.id)
             assertNotNull((root.getChildAt(0) as ImageView).drawable)
             tap(800f)
             await { ReflectionHelpers.getField<PlaybackEntry?>(activity, "pending") == null }

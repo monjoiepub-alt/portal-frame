@@ -1,5 +1,8 @@
 # Lenovo tablet regression build: 1.2.1-tablet (15)
 
+Historical implementation notes. See [TABLET_VALIDATION.md](TABLET_VALIDATION.md) for the
+1.2.2-tablet corrections and physical Lenovo results, including display-based AUTO orientation.
+
 Branch: `dev/tablet-playback-phase1`. Hardware verification of this new build is pending.
 
 ## Causes found and changes

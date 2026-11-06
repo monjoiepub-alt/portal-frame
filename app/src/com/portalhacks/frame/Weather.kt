@@ -18,11 +18,11 @@ internal object Weather {
 
     private const val TAG = "PortalFrame"
 
-    /** A current reading: a weather emoji plus a rounded temperature in degrees. */
+    /** A weather icon and rounded temperature; moon marks a clear night. */
     class Now(
         @JvmField val emoji: String,
         @JvmField val temp: Int,
-        @JvmField val moon: Boolean, // clear/mainly-clear at night → draw a blue crescent
+        @JvmField val moon: Boolean,
     ) {
         /** e.g. "☀️ 72°" */
         fun label(): String = "$emoji $temp°"

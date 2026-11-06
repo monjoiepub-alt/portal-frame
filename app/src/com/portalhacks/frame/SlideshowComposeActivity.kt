@@ -17,8 +17,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import android.view.OrientationEventListener
-import android.view.Surface
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.Toast
@@ -42,9 +40,7 @@ class SlideshowComposeActivity : ComponentActivity() {
     private val session = PlaybackSession()
     private val timer = PlaybackTimer(ConfigReceiver.DEFAULT_DELAY_MS)
     private var active = false
-    private var physicalPortrait = false
-    private var sensorReported = false
-    private var naturalPortrait = true
+    private var screenPortrait = false
     private var renderToken = 0L
     private var visible: PlaybackEntry? = null
     private var pending: PlaybackEntry? = null
@@ -57,18 +53,6 @@ class SlideshowComposeActivity : ComponentActivity() {
     private val settings get() = PlaybackSettings.read(prefs)
     private val sensorManager by lazy { getSystemService(SENSOR_SERVICE) as SensorManager }
     private val lightSensor by lazy { sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT) }
-    private val orientationSensor by lazy {
-        object : OrientationEventListener(this) {
-            override fun onOrientationChanged(angle: Int) {
-                val portrait = PhysicalOrientation.portrait(angle, naturalPortrait) ?: return
-                sensorReported = true
-                if (portrait != physicalPortrait) {
-                    physicalPortrait = portrait
-                    if (active) refreshPlayback(force = true)
-                }
-            }
-        }
-    }
     private val lightListener =
         object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
@@ -126,8 +110,7 @@ class SlideshowComposeActivity : ComponentActivity() {
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
-        physicalPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
-        naturalPortrait = naturalOrientationIsPortrait()
+        screenPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
         loader = ImageLoader(this)
         loader.onDimensions = { slide ->
             probing.add(slide.id)
@@ -138,16 +121,13 @@ class SlideshowComposeActivity : ComponentActivity() {
         root.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
             val changed = right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop
             if (active && right > left && bottom > top) {
-                if (changed) refreshPlayback(force = true)
+                if (changed) {
+                    screenPortrait = bottom - top > right - left
+                    refreshPlayback(force = true)
+                }
             }
         }
         setContent { AndroidView(factory = { root }, modifier = Modifier.fillMaxSize()) }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun naturalOrientationIsPortrait(): Boolean {
-        val rotated = windowManager.defaultDisplay.rotation in listOf(Surface.ROTATION_90, Surface.ROTATION_270)
-        return if (rotated) !physicalPortrait else physicalPortrait
     }
 
     private fun createRenderer() {
@@ -210,7 +190,6 @@ class SlideshowComposeActivity : ComponentActivity() {
         createRenderer()
         prefs.registerOnSharedPreferenceChangeListener(preferenceListener)
         refreshPlayback(force = true)
-        orientationSensor.enable()
         DropServerService.start(this)
         ContextCompat.registerReceiver(
             this,
@@ -235,7 +214,6 @@ class SlideshowComposeActivity : ComponentActivity() {
         handler.removeCallbacks(refreshTick)
         handler.removeCallbacks(autoTick)
         handler.removeCallbacks(applySettings)
-        orientationSensor.disable()
         sensorManager.unregisterListener(lightListener)
         unregisterReceiver(uploadReceiver)
         prefs.unregisterOnSharedPreferenceChangeListener(preferenceListener)
@@ -252,7 +230,8 @@ class SlideshowComposeActivity : ComponentActivity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        if (!sensorReported) physicalPortrait = newConfig.orientation == Configuration.ORIENTATION_PORTRAIT
+        // AUTO follows the displayed viewport, including ADB rotation and rotation-locked screens.
+        screenPortrait = newConfig.orientation == Configuration.ORIENTATION_PORTRAIT
         if (active) refreshPlayback(force = true)
     }
 
@@ -276,7 +255,7 @@ class SlideshowComposeActivity : ComponentActivity() {
             sourcesDirty = false
         }
         val resolved = sources.mapValues { (_, slides) -> slides.map { withDimensions(it) } }
-        session.configure(resolved, settings, physicalPortrait)
+        session.configure(resolved, settings, screenPortrait)
         resolved.values.flatten().distinctBy { it.id }
             .filter { it.width <= 0 || it.height <= 0 || loader.hasCachedSource(it.id) }.forEach { probe(it) }
     }
@@ -317,7 +296,7 @@ class SlideshowComposeActivity : ComponentActivity() {
         controller.cancelPresentation()
         val filter =
             when (settings.orientation) {
-                PlaybackPolicy.Orientation.AUTO -> if (physicalPortrait) "PORTRAIT" else "LANDSCAPE"
+                PlaybackPolicy.Orientation.AUTO -> if (screenPortrait) "PORTRAIT" else "LANDSCAPE"
                 else -> settings.orientation.name
             }
         val width = root.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
@@ -339,6 +318,14 @@ class SlideshowComposeActivity : ComponentActivity() {
         if (success && session.allowed(entry)) {
             session.shown(entry)
             visible = entry
+            // Stable opaque identifiers allow ADB sequence checks without logging private album URLs.
+            Log.i(
+                "FramePlayback",
+                "shown photo=${entry.slide.id.hashCode().toUInt().toString(16)} " +
+                    "album=${entry.album.hashCode().toUInt().toString(16)} mode=${settings.mode} " +
+                    "filter=${settings.orientation} screenPortrait=$screenPortrait " +
+                    "photo=${entry.slide.width}x${entry.slide.height} viewport=${root.width}x${root.height}",
+            )
             if (reset) timer.reset(now())
             if (settings.mode == PlaybackPolicy.Mode.NEXT_ALBUM && settings.album != session.selection) {
                 prefs.edit().putString(ConfigReceiver.KEY_SELECTED_ALBUM, session.selection).apply()
@@ -383,6 +370,7 @@ class SlideshowComposeActivity : ComponentActivity() {
     private fun togglePause() {
         val pause = !timer.userPaused
         timer.hold("user", pause, now())
+        Log.i("FramePlayback", "userPaused=$pause remainingMs=${timer.remaining(now())}")
         if (pause && visible != null && pending != null) {
             renderToken++
             pending = null

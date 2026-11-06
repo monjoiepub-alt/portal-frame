@@ -31,8 +31,9 @@ android {
         applicationId = "com.portalhacks.frame"
         minSdk = 28
         targetSdk = 29
-        versionCode = 15
-        versionName = "1.2.1-tablet"
+        versionCode = 16
+        versionName = "1.2.2-tablet"
+        manifestPlaceholders["frameLabel"] = "Frame"
     }
 
     compileOptions {
@@ -69,6 +70,13 @@ android {
     }
 
     buildTypes {
+        create("validation") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".validation"
+            versionNameSuffix = "-validation"
+            manifestPlaceholders["frameLabel"] = "Frame Validation"
+            matchingFallbacks += listOf("debug")
+        }
         getByName("release") {
             // R8: shrink + obfuscate the code and strip unused resources for the release APK.
             isMinifyEnabled = true
